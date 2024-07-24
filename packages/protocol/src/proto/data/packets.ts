@@ -54,7 +54,7 @@ import { RespawnPacket } from "./respawn";
 import { ScriptMessagePacket } from "./script-message";
 import { SetActorMotionPacket } from "./set-actor-motion";
 import { SetCommandsEnabledPacket } from "./set-commands-enabled";
-import { SetEntityDataPacket } from "./set-entity-data";
+import { SetActorDataPacket } from "./set-actor-data";
 import { SetLocalPlayerAsInitializedPacket } from "./set-local-player-as-initialized";
 import { SetPlayerGameTypePacket } from "./set-player-game-type";
 import { SetTitlePacket } from "./set-title";
@@ -85,6 +85,15 @@ import { BlockActorDataPacket } from "./block-actor-data";
 import { AwardAchievementPacket } from "./award-achievement";
 import { ServerToClientHandshakePacket } from "./server-to-client-handshake";
 import { DeathInfoPacket } from "./death-info";
+import { SetPlayerInventoryOptionsPacket } from "./set-player-inventory-options";
+import { ClientboundCloseFormPacket } from "./clientbound-close-form";
+import { MobEffectPacket } from "./mob-effect";
+import { CompletedUsingItemPacket } from "./completed-using-item";
+import { NpcRequestPacket } from "./npc-request";
+import { OpenSignPacket } from "./open-sign";
+import { ServerboundLoadingScreenPacketPacket } from "./server-bound-loading-screen";
+import { CameraShakePacket } from "./camera-shake";
+import { BookEditPacket } from "./book-edit";
 
 const Packets = {
 	[Packet.Login]: LoginPacket, // 1
@@ -107,13 +116,14 @@ const Packets = {
 	[Packet.UpdateBlock]: UpdateBlockPacket, // 21
 	[Packet.LevelEvent]: LevelEventPacket, // 25
 	[Packet.ActorEvent]: ActorEventPacket, // 27
+	[Packet.MobEffect]: MobEffectPacket,
 	[Packet.UpdateAttributes]: UpdateAttributesPacket, // 29
 	[Packet.InventoryTransaction]: InventoryTransactionPacket, // 30
 	[Packet.MobEquipment]: MobEquipmentPacket, // 31
 	[Packet.Interact]: InteractPacket, // 33
 	[Packet.BlockPickRequest]: BlockPickRequestPacket, // 34
 	[Packet.PlayerAction]: PlayerActionPacket, // 36
-	[Packet.SetEntityData]: SetEntityDataPacket, // 39
+	[Packet.SetActorData]: SetActorDataPacket, // 39
 	[Packet.SetActorMotion]: SetActorMotionPacket, // 40
 	[Packet.Animate]: AnimatePacket, // 44
 	[Packet.Respawn]: RespawnPacket, // 45
@@ -140,6 +150,8 @@ const Packets = {
 	[Packet.Transfer]: TransferPacket, // 85
 	[Packet.SetTitle]: SetTitlePacket, // 88
 	[Packet.PlayerSkin]: PlayerSkinPacket, // 93
+	[Packet.BookEdit]: BookEditPacket, // 97
+	[Packet.NpcRequest]: NpcRequestPacket, // 98
 	[Packet.ModalFormRequest]: ModalFormRequestPacket, // 100
 	[Packet.ModalFormResponse]: ModalFormResponsePacket, // 101
 	[Packet.RemoveObjective]: RemoveObjectivePacket, // 106
@@ -152,6 +164,7 @@ const Packets = {
 	[Packet.BiomeDefinitionList]: BiomeDefinitionListPacket, // 122
 	[Packet.LevelSoundEvent]: LevelSoundEventPacket, // 123
 	[Packet.Emote]: EmotePacket, // 138
+	[Packet.CompletedUsingItem]: CompletedUsingItemPacket, // 142
 	[Packet.NetworkSettings]: NetworkSettingsPacket, // 143
 	[Packet.PlayerAuthInput]: PlayerAuthInputPacket, // 144
 	[Packet.CreativeContent]: CreativeContentPacket, // 145
@@ -160,6 +173,7 @@ const Packets = {
 	[Packet.EmoteList]: EmoteListPacket, // 152
 	[Packet.PacketViolationWarning]: PacketViolationWarningPacket, // 156
 	[Packet.AnimateEntity]: AnimateEntityPacket, // 158
+	[Packet.CameraShake]: CameraShakePacket, // 159
 	[Packet.ItemComponent]: ItemComponentPacket, // 162
 	[Packet.NpcDialogue]: NpcDialoguePacket, // 169
 	[Packet.ScriptMessage]: ScriptMessagePacket, // 177
@@ -168,8 +182,12 @@ const Packets = {
 	[Packet.UpdateAdventureSettings]: UpdateAdventureSettingsPacket, // 188
 	[Packet.DeathInfo]: DeathInfoPacket, // 189
 	[Packet.RequestNetworkSettings]: RequestNetworkSettingsPacket, // 193
+	[Packet.OpenSign]: OpenSignPacket, // 303
+	[Packet.SetPlayerInventoryOptions]: SetPlayerInventoryOptionsPacket, // 307
 	[Packet.SetHud]: SetHudPacket, // 308
-	[Packet.AwardAchievement]: AwardAchievementPacket // 309
+	[Packet.AwardAchievement]: AwardAchievementPacket, // 309
+	[Packet.ClientboundCloseForm]: ClientboundCloseFormPacket, // 310
+	[Packet.ServerboundLoadingScreenPacket]: ServerboundLoadingScreenPacketPacket // 312
 };
 
 export { Packets };

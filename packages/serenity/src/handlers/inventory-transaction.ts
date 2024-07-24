@@ -7,7 +7,8 @@ import {
 	Vector3f,
 	type ItemUseInventoryTransaction,
 	Gamemode,
-	type ItemUseOnEntityInventoryTransaction
+	type ItemUseOnEntityInventoryTransaction,
+	type ItemReleaseInventoryTransaction
 } from "@serenityjs/protocol";
 import { ItemUseCause, type Player } from "@serenityjs/world";
 import { BlockIdentifier, BlockPermutation } from "@serenityjs/block";
@@ -64,6 +65,18 @@ class InventoryTransaction extends SerenityHandler {
 				this.handleItemUseOnEntityTransaction(itemUse, player);
 				break;
 			}
+
+			case ComplexInventoryTransaction.ItemReleaseTransaction: {
+				// Get the itemRelease object from the transaction
+				const itemRelease = packet.transaction.itemRelease;
+
+				// Check if the itemRelease object is valid, if not throw an error that the itemRelease object is missing.
+				if (!itemRelease) throw new Error("ItemRelease object is missing.");
+
+				// Handle the itemRelease transaction
+				this.handleItemReleaseTransaction(itemRelease, player);
+				break;
+			}
 		}
 	}
 
@@ -72,6 +85,10 @@ class InventoryTransaction extends SerenityHandler {
 		player: Player
 	): void {
 		// TODO: CLEANUP
+
+		// ? The Drop Action has exactly 2 actions
+		if (actions.length > 2) return;
+
 		// NOTE: This implmentation is incomplete and will be updated in the future.
 		// This only handles item dropping for now.
 		const action = actions[0] as InventoryAction;
@@ -146,7 +163,7 @@ class InventoryTransaction extends SerenityHandler {
 
 				// Check if a block type is present within the item
 				const blockType = usingItem.type.block;
-				if (!blockType) break;
+				if (!blockType || blockType.identifier === BlockIdentifier.Air) break;
 
 				// Get the resulting block from the interacted block
 				// ANd check if the block is also air
@@ -174,8 +191,14 @@ class InventoryTransaction extends SerenityHandler {
 					blockType.permutations[usingItem.metadata] ??
 					blockType.getPermutation();
 
+				// Get the click position of the packet
+				const clickPosition = transaction.clickPosition;
+
 				// Set the block with the blockType permutation based off the items metadata
-				resultingBlock.setPermutation(blockPermutation, player);
+				resultingBlock.setPermutation(blockPermutation, {
+					player,
+					clickPosition
+				});
 
 				// Check if the player is in survival mode, if so decrement the item
 				if (player.gamemode === Gamemode.Survival) usingItem.decrement();
@@ -189,11 +212,25 @@ class InventoryTransaction extends SerenityHandler {
 				);
 
 				if (!usingItem) break;
-				player.usingItem = usingItem;
+				if (!player.usingItem) {
+					// Set the player's using item
+					player.usingItem = usingItem;
+
+					// Trigger the onStartUse method of the item components
+					for (const component of usingItem.components.values()) {
+						component.onStartUse?.(player, ItemUseCause.Use);
+					}
+
+					// Break the switch statement
+					break;
+				}
 
 				for (const component of usingItem.components.values()) {
 					// Trigger the onUse method of the item component.
-					component.onUse?.(player, ItemUseCause.Use);
+					const used = component.onUse?.(player, ItemUseCause.Use);
+
+					// Check if the item was successfully used
+					if (used) player.usingItem = null;
 				}
 
 				break;
@@ -224,6 +261,25 @@ class InventoryTransaction extends SerenityHandler {
 		for (const component of entity.components.values()) {
 			component.onInteract?.(player, transaction.type);
 		}
+	}
+
+	public static handleItemReleaseTransaction(
+		transaction: ItemReleaseInventoryTransaction,
+		player: Player
+	): void {
+		// Get the using item of the player
+		const usingItem = player.usingItem;
+
+		// Check if the using item is valid
+		if (!usingItem) return;
+
+		// Trigger the onRelease method of the item components
+		for (const component of usingItem.components.values()) {
+			component.onStopUse?.(player, ItemUseCause.Use);
+		}
+
+		// Set the player's using item to null
+		player.usingItem = null;
 	}
 }
 

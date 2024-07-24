@@ -7,3 +7,6 @@ export * from "./enchantable";
 export * from "./lore";
 export * from "./durability";
 export * from "./armor";
+export * from "./food";
+export * from "./dye";
+export * from "./book";

@@ -9,17 +9,20 @@ import {
 	UpdateBlockPacket,
 	Vector3f
 } from "@serenityjs/protocol";
-import { BlockPermutation, BlockIdentifier } from "@serenityjs/block";
-import { ItemType } from "@serenityjs/item";
+import {
+	BlockPermutation,
+	BlockIdentifier,
+	type BlockType
+} from "@serenityjs/block";
+import { ItemIdentifier, ItemType } from "@serenityjs/item";
 import { CompoundTag } from "@serenityjs/nbt";
 
 import { ItemStack } from "../item";
-import { BlockComponent } from "../components";
+import { BlockComponent, BlockStateComponent } from "../components";
 
-import type { BlockComponents } from "../types";
+import type { BlockComponents, BlockUpdateOptions } from "../types";
 import type { Chunk } from "../chunk";
 import type { Player } from "../player";
-import type { CardinalDirection } from "../enums";
 import type { Dimension } from "../world";
 
 class Block {
@@ -41,7 +44,7 @@ class Block {
 	/**
 	 * The NBT data of the block.
 	 */
-	public readonly nbt = new CompoundTag("", {});
+	public nbt = new CompoundTag("", {});
 
 	/**
 	 * The permutation of the block.
@@ -65,20 +68,24 @@ class Block {
 	}
 
 	/**
-	 * If the block is air.
+	 * Whether or not the block is air.
 	 */
 	public isAir(): boolean {
-		return this.permutation.type.identifier === BlockIdentifier.Air;
+		return this.permutation.type.air;
 	}
 
 	/**
-	 * If the block is liquid.
+	 * Whether or not the block is liquid.
 	 */
 	public isLiquid(): boolean {
-		return (
-			this.permutation.type.identifier === BlockIdentifier.Water ||
-			this.permutation.type.identifier === BlockIdentifier.Lava
-		);
+		return this.permutation.type.liquid;
+	}
+
+	/**
+	 * Whether or not the block is solid.
+	 */
+	public isSolid(): boolean {
+		return this.permutation.type.solid;
 	}
 
 	/**
@@ -156,11 +163,11 @@ class Block {
 	/**
 	 * Sets the permutation of the block.
 	 * @param permutation The permutation to set.
-	 * @param playerInitiated If the change was initiated by a player.
+	 * @param options The options of the block update.
 	 */
 	public setPermutation(
 		permutation: BlockPermutation,
-		playerInitiated?: Player
+		options?: BlockUpdateOptions
 	): Block {
 		// Clear the previous components.
 		if (this.permutation.type !== permutation.type) this.clearComponents();
@@ -195,13 +202,45 @@ class Block {
 		) ?? [])
 			new component(this, component.identifier);
 
+		// Register the components that are type specific.
+		for (const identifier of permutation.type.components) {
+			// Get the component from the registry
+			const component = BlockComponent.components.get(identifier);
+
+			// Check if the component exists.
+			if (component) new component(this, identifier);
+		}
+
+		// Register the components that are state specific.
+		for (const key of Object.keys(permutation.state)) {
+			// Get the component from the registry
+			const component = [...BlockComponent.components.values()].find((x) => {
+				// If the identifier is undefined, we will skip it.
+				if (!x.identifier || !(x.prototype instanceof BlockStateComponent))
+					return false;
+
+				// Initialize the component as a BlockStateComponent.
+				const component = x as typeof BlockStateComponent;
+
+				// Check if the identifier includes the key.
+				// As some states dont include a namespace.
+				return component.state === key;
+			});
+
+			// Check if the component exists.
+			if (component) new component(this, key);
+		}
+
 		// Check if the change was initiated by a player.
 		// If so, we will play the block place sound.
-		if (playerInitiated) {
+		if (options && options.player) {
+			// Get the clicked position of the player.
+			const clickedPosition = options.clickPosition ?? new Vector3f(0, 0, 0);
+
 			// Call the onPlace method of the components.
 			for (const component of this.components.values()) {
 				// Call the onBlockPlacedByPlayer method.
-				component.onPlace?.(playerInitiated);
+				component.onPlace?.(options.player, clickedPosition);
 			}
 
 			// Create a new LevelSoundEventPacket.
@@ -236,6 +275,47 @@ class Block {
 	}
 
 	/**
+	 * Gets the type of the block
+	 * @returns The type of the block.
+	 */
+	public getType(): BlockType {
+		return this.permutation.type;
+	}
+
+	/**
+	 * Sets the type of the block.
+	 * @param type The type of the block.
+	 * @param playerInitiated If the change was initiated by a player.
+	 */
+	public setType(type: BlockType, options?: BlockUpdateOptions): Block {
+		// Get the permutation of the block.
+		const permutation = type.getPermutation();
+
+		// Set the permutation of the block.
+		this.setPermutation(permutation, { player: options?.player });
+
+		// Return the block.
+		return this;
+	}
+
+	/**
+	 * Gets the tags of the block.
+	 * @returns The tags of the block.
+	 */
+	public getTags(): Array<string> {
+		return this.permutation.type.tags;
+	}
+
+	/**
+	 * Checks if the block has a tag.
+	 * @param tag The tag to check.
+	 * @returns Whether or not the block has the tag.
+	 */
+	public hasTag(tag: string): boolean {
+		return this.permutation.type.tags.includes(tag);
+	}
+
+	/**
 	 * Gets the item stack of the block.
 	 * @param amount The amount of items in the stack.
 	 */
@@ -245,6 +325,47 @@ class Block {
 
 		// Create a new ItemStack.
 		return ItemStack.create(type, amount ?? 1, this.permutation.index);
+	}
+
+	/**
+	 * Gets the tool required to break the block.
+	 * @returns The tool required to break the block.
+	 */
+	public getTool(): ItemIdentifier {
+		// Get the tags of the block.
+		const tags = this.getTags().sort((a, b) => b.localeCompare(a));
+
+		// Iterate over the tags.
+		for (const tag of tags) {
+			switch (tag) {
+				case "wooden_axe_diggable": {
+					return ItemIdentifier.WoodenAxe;
+				}
+
+				case "stone_pick_diggable": {
+					return ItemIdentifier.StonePickaxe;
+				}
+
+				case "iron_pick_diggable": {
+					return ItemIdentifier.IronPickaxe;
+				}
+
+				case "golden_pick_diggable": {
+					return ItemIdentifier.GoldenPickaxe;
+				}
+
+				case "diamond_pick_diggable": {
+					return ItemIdentifier.DiamondPickaxe;
+				}
+
+				case "netherite_pick_diggable": {
+					return ItemIdentifier.NetheritePickaxe;
+				}
+			}
+		}
+
+		// Return the default tool.
+		return ItemIdentifier.Air;
 	}
 
 	/**
@@ -354,33 +475,8 @@ class Block {
 	}
 
 	/**
-	 * Sets the direction of the block.
-	 * @param direction The direction to set.
-	 * @param upsideDown If the block is upside down.
-	 */
-	// TODO: Add support for minecraft:cardinal_direction states. (chest, furnace, etc.)
-	public setDirection(
-		direction: CardinalDirection,
-		upsideDown?: boolean
-	): void {
-		// Get the state keys
-		const keys = Object.keys(this.permutation.state);
-
-		// Check if the block has a weirdo direction state.
-		if (keys.includes("weirdo_direction") && keys.includes("upside_down_bit")) {
-			// Get the new permutation with the direction state.
-			const permutation = this.permutation.type.getPermutation({
-				upside_down_bit: upsideDown ?? false,
-				weirdo_direction: direction
-			});
-
-			// set the permutation
-			this.setPermutation(permutation);
-		}
-	}
-
-	/**
 	 * Destroys the block.
+	 * @param playerInitiated If the block was destroyed by a player.
 	 */
 	public destroy(playerInitiated?: Player): void {
 		// Call the onBreak method of the components.
@@ -414,7 +510,6 @@ class Block {
 		const update = new BlockActorDataPacket();
 		update.position = this.position;
 		update.nbt = this.nbt;
-
 		// Send the packet to the dimension.
 		this.dimension.broadcast(update);
 

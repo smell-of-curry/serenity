@@ -1,8 +1,10 @@
+import { ByteTag, CompoundTag, IntTag, StringTag } from "@serenityjs/nbt";
+import { type EntityIdentifier, EntityType } from "@serenityjs/entity";
+
 import { Component } from "../component";
 
 import type { Player } from "../../player";
 import type { ItemUseOnEntityInventoryTransactionType } from "@serenityjs/protocol";
-import type { EntityIdentifier, EntityType } from "@serenityjs/entity";
 import type { Entity } from "../../entity";
 
 class EntityComponent extends Component {
@@ -18,6 +20,11 @@ class EntityComponent extends Component {
 	 * A collective registry of all entity components.
 	 */
 	public static readonly components = new Map<string, typeof EntityComponent>();
+
+	/**
+	 * The entity type identifiers to bind the component to.
+	 */
+	public static readonly types: Array<EntityIdentifier> = [];
 
 	/**
 	 * The entity the component is binded to.
@@ -99,14 +106,117 @@ class EntityComponent extends Component {
 		type: ItemUseOnEntityInventoryTransactionType
 	): void;
 
+	/**
+	 * Get a component by its identifier from the registry.
+	 * @param identifier The identifier of the component.
+	 * @returns The component if found, otherwise null.
+	 */
 	public static get(identifier: string): typeof EntityComponent | null {
 		return EntityComponent.components.get(identifier) as
 			| typeof EntityComponent
 			| null;
 	}
 
+	/**
+	 * Get all the components from the registry.
+	 * @returns All the components from the registry.
+	 */
 	public static getAll(): Array<typeof EntityComponent> {
 		return [...EntityComponent.components.values()];
+	}
+
+	/**
+	 * Compresses the component into a compound tag.
+	 * @param component The component to compress.
+	 * @returns The compressed component.
+	 */
+	public static compress(component: Component): CompoundTag {
+		// Create a new compound tag.
+		const tag = new CompoundTag(component.identifier, {});
+
+		// Get the keys and values of the component.
+		const keys = Object.keys(component);
+		const values = Object.values(component);
+
+		// Iterate over the keys.
+		for (const [index, key] of keys.entries()) {
+			// Get the key and value.
+			const value = values[index];
+
+			// Switch on the type of the value.
+			switch (typeof value) {
+				case "string": {
+					tag.addTag(new StringTag(key, value));
+					break;
+				}
+
+				case "boolean": {
+					tag.addTag(new ByteTag(key, value ? 1 : 0));
+					break;
+				}
+
+				case "number": {
+					tag.addTag(new IntTag(key, value));
+					break;
+				}
+			}
+		}
+
+		// Return the tag.
+		return tag;
+	}
+
+	/**
+	 * Decompresses the component from a compound tag.
+	 * @param tag The tag to decompress.
+	 * @param entity The entity to bind the component to.
+	 * @returns The decompressed component.
+	 */
+	public static decompress(tag: CompoundTag, entity: Entity): EntityComponent {
+		// Get the component constructor from the registry.
+		// And throw an error if the component is not found.
+		const constructor = this.get(tag.name);
+		if (!constructor) throw new Error(`Component ${tag.name} not found.`);
+
+		// Construct the component with the entity and the identifier.
+		const component = new constructor(entity, tag.name) as unknown as Record<
+			string,
+			unknown
+		>;
+
+		// Iterate over the tags.
+		for (const entry of tag.getTags()) {
+			const key = entry.name;
+
+			if (entry instanceof StringTag) {
+				component[key] = entry.value;
+			}
+
+			if (entry instanceof ByteTag) {
+				component[key] = entry.value === 1;
+			}
+
+			if (entry instanceof IntTag) {
+				component[key] = entry.value;
+			}
+		}
+
+		// Return the component.
+		return component as unknown as EntityComponent;
+	}
+
+	public static bind(): void {
+		// Bind the component to the entity types.
+		for (const identifier of this.types) {
+			// Get the entity type.
+			const type = EntityType.get(identifier);
+
+			// Register the component to the entity type.
+			if (type) this.register(type);
+		}
+
+		// Register the component.
+		EntityComponent.components.set(this.identifier, this);
 	}
 }
 

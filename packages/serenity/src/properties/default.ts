@@ -12,8 +12,15 @@ server-port: 19132
 server-tps: 20
 # The amount of ticks per second the server will run at.
 
-server-shutdown-message: "Server shutting down..."
+server-shutdown-message: "Server Closed."
 # The message to show when the server is shutting down.
+
+server-mtu-max: 1012
+# The maximum transmission unit of the server.
+# Lowering this value can help with packet loss.
+
+server-mtu-min: 400
+# The minimum transmission unit of the server.
 
 max-players: 20
 # The maximum amount of players that can join the server.
@@ -38,7 +45,7 @@ plugins-path: "plugins"
 worlds-default: "default"
 # The default world to load when the server starts.
 
-worlds-default-provider: "internal"
+worlds-default-provider: "leveldb"
 # The default provider to use when creating new worlds.
 
 worlds-path: "worlds"

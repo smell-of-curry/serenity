@@ -1,16 +1,22 @@
 import type {
+	PlayerAbsorptionComponent,
 	EntityAlwaysShowNametagComponent,
 	EntityArmorComponent,
 	EntityBoundingHeightComponent,
 	EntityBoundingWidthComponent,
 	EntityBreathingComponent,
+	EntityEffectsComponent,
 	EntityHasGravityComponent,
 	EntityHealthComponent,
 	EntityInventoryComponent,
+	EntityIsVisibleComponent,
 	EntityItemComponent,
 	EntityNametagComponent,
+	EntityNpcComponent,
+	EntityOnFireComponent,
 	EntityPhysicsComponent,
-	EntityScaleComponent
+	EntityScaleComponent,
+	EntityVariantComponent
 } from "../../components";
 
 /**
@@ -18,8 +24,8 @@ import type {
  */
 interface EntityAttributeComponents {
 	"minecraft:health": EntityHealthComponent;
+	"minecraft:absorption": PlayerAbsorptionComponent;
 }
-
 /**
  * The metadata components of an entity.
  */
@@ -33,6 +39,9 @@ interface EntityMetadataComponents {
 	"minecraft:scale": EntityScaleComponent;
 	"minecraft:item": EntityItemComponent;
 	"minecraft:physics": EntityPhysicsComponent;
+	"minecraft:is_visible": EntityIsVisibleComponent;
+	"minecraft:on_fire": EntityOnFireComponent;
+	"minecraft:variant": EntityVariantComponent;
 }
 
 /**
@@ -43,6 +52,8 @@ interface EntityComponents
 		EntityMetadataComponents {
 	"minecraft:inventory": EntityInventoryComponent;
 	"minecraft:armor": EntityArmorComponent;
+	"minecraft:effects": EntityEffectsComponent;
+	"minecraft:npc": EntityNpcComponent;
 }
 
 export {

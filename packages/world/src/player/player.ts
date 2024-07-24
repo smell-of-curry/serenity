@@ -12,6 +12,7 @@ import {
 	type PermissionLevel,
 	PlayStatus,
 	PlayStatusPacket,
+	PropertySyncData,
 	RespawnPacket,
 	RespawnState,
 	type SerializedSkin,
@@ -21,21 +22,18 @@ import {
 	TextPacketType,
 	TransferPacket,
 	UpdateAbilitiesPacket,
-	type Vector3f
+	Vector3f
 } from "@serenityjs/protocol";
 import { EntityIdentifier, EntityType } from "@serenityjs/entity";
 
 import { Entity } from "../entity";
 import {
 	EntityAlwaysShowNametagComponent,
-	EntityBreathingComponent,
-	EntityHasGravityComponent,
 	EntityHealthComponent,
 	EntityInventoryComponent,
 	EntityMovementComponent,
 	EntityNametagComponent,
 	EntityArmorComponent,
-	EntityInteractComponent,
 	PlayerAttackMobsComponent,
 	PlayerAttackPlayersComponent,
 	PlayerBuildComponent,
@@ -60,7 +58,16 @@ import {
 	PlayerWalkSpeedComponent,
 	PlayerWorldBuilderComponent,
 	EntityComponent,
-	PlayerEntityRenderingComponent
+	PlayerEntityRenderingComponent,
+	EntitySkinIDComponent,
+	PlayerHungerComponent,
+	PlayerExhaustionComponent,
+	PlayerSaturationComponent,
+	EntityHasGravityComponent,
+	EntityBreathingComponent,
+	PlayerExperienceLevelComponent,
+	PlayerExperienceComponent,
+	PlayerAbsorptionComponent
 } from "../components";
 import { ItemStack } from "../item";
 
@@ -71,8 +78,6 @@ import type { Container } from "../container";
 import type { PlayerComponents } from "../types/components";
 import type { LoginTokenData } from "../types/login-data";
 import type { NetworkSession } from "@serenityjs/network";
-
-// TODO: Possibly expose a collection of entity metadata?
 
 /**
  * Represents a player in a Dimension instance that is connected to the server, and can interact with the world. Creating a new Player instance should be handled by the server instead of Plugins. This class is responsible for handling player-specific logic, such as sending packets, handling player movement, and managing player data. Player instances requires a NetworkSession instance to communicate with the player, and data from the player's login tokens.
@@ -116,6 +121,11 @@ class Player extends Entity {
 	public readonly skin: SerializedSkin;
 
 	/**
+	 * The gamemode of the player.
+	 */
+	public gamemode = Gamemode.Survival;
+
+	/**
 	 * The player's current network latency.
 	 */
 	public ping = 0;
@@ -155,14 +165,6 @@ class Player extends Entity {
 	 */
 	public isFlying = false;
 
-	// Protected properties
-
-	/**
-	 * @deprecated This property is deprecated and will be removed in the future.
-	 * The player's gamemode.
-	 */
-	protected _gamemode = Gamemode.Creative;
-
 	public constructor(
 		session: NetworkSession,
 		tokens: LoginTokenData,
@@ -186,44 +188,43 @@ class Player extends Entity {
 	}
 
 	/**
-	 * The player's gamemode.
+	 * Gets the player's gamemode.
+	 * @returns The gamemode of the player.
 	 */
-	public get gamemode(): Gamemode {
-		return this._gamemode;
+	public getGamemode(): Gamemode {
+		return this.gamemode;
 	}
 
-	public set gamemode(value: Gamemode) {
-		this._gamemode = value;
+	/**
+	 * Sets the gamemode of the player.
+	 * @param gamemode The gamemode to set.
+	 */
+	public setGamemode(gamemode: Gamemode): void {
+		// Set the gamemode of the player
+		this.gamemode = gamemode;
 
 		// Create a new SetPlayerGameTypePacket
 		const packet = new SetPlayerGameTypePacket();
-		packet.gamemode = value;
+		packet.gamemode = gamemode;
 
 		// Send the packet to the player
 		this.session.send(packet);
 	}
 
 	/**
-	 * Ticks the player instance.
+	 * The player experience level
 	 */
-	public tick(): void {
-		// TODO: Move this elsewhere.
-		// Check if the current tick is divisible by 35
-		// if (this.dimension.world.currentTick % 35n === 0n) {
-		// 	// Calculate the ping of the player.
-		// 	const packet = new NetworkStackLatencyPacket();
-		// 	packet.timestamp = BigInt(Date.now());
-		// 	packet.fromServer = true;
-		// 	// Send the packet to the player.
-		// 	this.session.sendImmediate(packet);
-		// 	// Wait for the player to respond.
-		// 	this.session.once(packet.getId(), () => {
-		// 		// Calculate the ping of the player.
-		// 		const stamp = Number(BigInt(Date.now()) - packet.timestamp);
-		// 		// Subtract 30ms from the ping to get the actual ping.
-		// 		this.ping = stamp - 30;
-		// 	});
-		// }
+	public get level(): number {
+		if (!this.hasComponent("minecraft:player.level")) return 0;
+		const experienceComponent = this.getComponent("minecraft:player.level");
+
+		return experienceComponent.level;
+	}
+
+	public set level(experienceLevel: number) {
+		if (!this.hasComponent("minecraft:player.level")) return;
+		const experienceComponent = this.getComponent("minecraft:player.level");
+		experienceComponent.level = experienceLevel;
 	}
 
 	/**
@@ -240,7 +241,9 @@ class Player extends Entity {
 		const available = this.dimension.world.commands.serialize();
 
 		// Filter out the commands that are not applicable to the player
-		const filtered = available.commands;
+		const filtered = available.commands.filter(
+			(command) => command.permissionLevel <= this.permission
+		);
 
 		// Update the commands of the player
 		available.commands = filtered;
@@ -280,14 +283,11 @@ class Player extends Entity {
 				? new NetworkItemStackDescriptor(0)
 				: ItemStack.toNetworkStack(heldItem);
 		packet.gamemode = this.gamemode;
-		packet.metadata = [...this.metadata.values()];
-		packet.properties = {
-			ints: [],
-			floats: []
-		};
+		packet.data = [...this.metadata];
+		packet.properties = new PropertySyncData([], []);
 		packet.uniqueEntityId = this.unique;
-		packet.premissionLevel = 2;
-		packet.commandPermission = 2;
+		packet.premissionLevel = this.permission;
+		packet.commandPermission = this.permission === 2 ? 1 : 0;
 		packet.abilities = [
 			{
 				type: AbilityLayerType.Base,
@@ -300,23 +300,22 @@ class Player extends Entity {
 		packet.deviceId = "";
 		packet.deviceOS = 0;
 
-		// Send the packet to the player
-		player ? player.session.send(packet) : this.dimension.broadcast(packet);
+		// Check if the dimension has the player already
+		if (this.dimension.entities.has(this.unique)) {
+			// Send the packet to the player
+			player
+				? player.session.send(packet)
+				: this.dimension.broadcastExcept(this, packet);
+		} else {
+			// Send the packet to the player
+			player ? player.session.send(packet) : this.dimension.broadcast(packet);
+		}
 
 		// If a player was provided, then return
 		if (player) return;
 
 		// Add the player to the dimension
 		this.dimension.entities.set(this.unique, this);
-
-		// Spawn all entities in the dimension for the player
-		// for (const entity of this.dimension.entities.values()) {
-		// 	// Check if the entity is the player
-		// 	if (entity === this) continue;
-
-		// 	// Spawn the entity for the player
-		// 	entity.spawn(this);
-		// }
 
 		// Trigger the onSpawn method of all applicable components
 		for (const component of this.getComponents()) component.onSpawn?.();
@@ -333,8 +332,12 @@ class Player extends Entity {
 		// Create a new RespawnPacket
 		const respawn = new RespawnPacket();
 
+		// Get the spawn position of the dimension
+		// TODO: Add a spawn position to player instance
+		const { x, y, z } = this.dimension.spawn;
+
 		// Set the packet properties
-		respawn.position = this.position; // TODO: Set the respawn position
+		respawn.position = this.position;
 		respawn.runtimeEntityId = this.runtime;
 		respawn.state = RespawnState.ClientReadyToSpawn;
 
@@ -347,11 +350,54 @@ class Player extends Entity {
 		// Send the packets to the player
 		this.session.send(respawn, ready);
 
-		// Check if the player is already in the dimension
-		if (this.dimension.entities.has(this.unique)) return;
+		// Reset the players health & chunks
+		this.getComponent("minecraft:health").resetToDefaultValue();
 
 		// Add the player to the dimension
 		this.spawn();
+
+		// Teleport the player to the spawn position
+		this.teleport(new Vector3f(x, y, z));
+
+		// Set the player as alive
+		this.isAlive = true;
+	}
+
+	public kill(): void {
+		this.addExperience(-this.getTotalExperience());
+		if (this.hasComponent("minecraft:player.hunger")) {
+			const hunger = this.getComponent("minecraft:player.hunger");
+			const exhaustion = this.getComponent("minecraft:player.exhaustion");
+			const saturation = this.getComponent("minecraft:player.saturation");
+
+			hunger.resetToDefaultValue();
+			exhaustion.resetToDefaultValue();
+			saturation.resetToDefaultValue();
+		}
+
+		super.kill();
+	}
+
+	/**
+	 * Querys if the player is hungry
+	 * @returns The player is hungry
+	 */
+
+	public isHungry(): boolean {
+		if (!this.hasComponent("minecraft:player.hunger")) return false;
+		const hungerComponent = this.getComponent("minecraft:player.hunger");
+		return hungerComponent.isHungry;
+	}
+
+	/**
+	 * Exhausts the player decreasing food over time
+	 * @param amount The exhaustion amount
+	 */
+	public exhaust(amount: number): void {
+		if (!this.hasComponent("minecraft:player.hunger")) return;
+		const hungerComponent = this.getComponent("minecraft:player.hunger");
+
+		hungerComponent.exhaust(amount);
 	}
 
 	/**
@@ -410,7 +456,7 @@ class Player extends Entity {
 		// Create a new UpdateAbilitiesPacket
 		const packet = new UpdateAbilitiesPacket();
 		packet.permissionLevel = this.permission;
-		packet.commandPersmissionLevel = 2;
+		packet.commandPersmissionLevel = this.permission === 2 ? 1 : 0;
 		packet.entityUniqueId = this.unique;
 		packet.abilities = [
 			{
@@ -641,6 +687,67 @@ class Player extends Entity {
 		// Send the packet to the player
 		this.session.send(packet);
 	}
+
+	/**
+	 * Gets the total amount of experience the player has
+	 * @returns The amount of experience
+	 */
+
+	public getTotalExperience(): number {
+		if (!this.hasComponent("minecraft:player.experience")) return 0;
+		const experienceComponent = this.getComponent(
+			"minecraft:player.experience"
+		);
+		const experienceLevelComponent = this.getComponent(
+			"minecraft:player.level"
+		);
+
+		return (
+			experienceComponent.experience + experienceLevelComponent.toExperience()
+		);
+	}
+
+	/**
+	 * Gives the needed experience to the next level
+	 * @param level The level to get the needed experience
+	 * @returns The needed experience
+	 */
+	public getNextLevelXp(level: number = this.level): number {
+		let neededExperience: number = 0;
+
+		switch (true) {
+			case level <= 15: {
+				neededExperience = 2 * level + 7;
+				break;
+			}
+			case level > 15 && level <= 30: {
+				neededExperience = 5 * level - 38;
+				break;
+			}
+			case level > 30: {
+				neededExperience = 9 * level - 158;
+				break;
+			}
+		}
+		return neededExperience;
+	}
+
+	/**
+	 * Adds or removes experience of the player
+	 * @param experienceAmount The experience amount to be added / removed, negative values removes experience
+	 */
+	public addExperience(experienceAmount: number): void {
+		if (!this.hasComponent("minecraft:player.experience")) return;
+		const experienceComponent = this.getComponent(
+			"minecraft:player.experience"
+		);
+
+		if (experienceAmount > 0) {
+			experienceComponent.addExperience(experienceAmount);
+			return;
+		}
+		experienceComponent.removeExperience(Math.abs(experienceAmount));
+	}
 }
 
 export { Player };
@@ -657,9 +764,12 @@ EntityNametagComponent.register(type);
 EntityAlwaysShowNametagComponent.register(type);
 EntityHealthComponent.register(type);
 EntityArmorComponent.register(type);
-EntityInteractComponent.register(type);
+EntitySkinIDComponent.register(type);
 PlayerBuildComponent.register(type);
 PlayerMineComponent.register(type);
+PlayerSaturationComponent.register(type);
+PlayerExhaustionComponent.register(type);
+PlayerHungerComponent.register(type);
 PlayerDoorsAndSwitchesComponent.register(type);
 PlayerOpenContainersComponent.register(type);
 PlayerAttackPlayersComponent.register(type);
@@ -680,3 +790,6 @@ PlayerPrivilegedBuilderComponent.register(type);
 PlayerCountComponent.register(type);
 PlayerChunkRenderingComponent.register(type);
 PlayerEntityRenderingComponent.register(type);
+PlayerExperienceLevelComponent.register(type);
+PlayerExperienceComponent.register(type);
+PlayerAbsorptionComponent.register(type);

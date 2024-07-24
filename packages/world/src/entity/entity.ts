@@ -6,25 +6,36 @@ import {
 	Attribute,
 	type AttributeName,
 	ChunkCoords,
-	MetadataDictionary,
-	type MetadataFlags,
-	MetadataKey,
-	MetadataType,
+	type EffectType,
 	MoveActorAbsolutePacket,
 	RemoveEntityPacket,
 	Rotation,
 	SetActorMotionPacket,
-	SetEntityDataPacket,
+	SetActorDataPacket,
 	UpdateAttributesPacket,
-	Vector3f
+	Vector3f,
+	PropertySyncData,
+	type DataItem,
+	type ActorFlag,
+	type ActorDamageCause,
+	ActorDataId
 } from "@serenityjs/protocol";
 import { EntityIdentifier, EntityType } from "@serenityjs/entity";
 import { CommandExecutionState, type CommandResult } from "@serenityjs/command";
 
 import { CardinalDirection } from "../enums";
-import { EntityComponent } from "../components";
+import {
+	EntityAlwaysShowNametagComponent,
+	EntityComponent,
+	EntityEffectsComponent,
+	EntityHealthComponent,
+	EntityNametagComponent,
+	EntityOnFireComponent,
+	EntityVariantComponent
+} from "../components";
 import { ItemStack } from "../item";
 
+import type { Effect } from "../effect/effect";
 import type { Chunk } from "../chunk";
 import type { Player } from "../player";
 import type { Dimension, World } from "../world";
@@ -52,11 +63,12 @@ import type { EntityComponents } from "../types/components";
 	entity.spawn();
  * ```
  */
+
 class Entity {
 	/**
 	 * The running total of the entity runtime id.
 	 */
-	public static runtime = 2n; // For some reason, the runtime id needs to start at 2???
+	public static runtime = 1n;
 
 	/**
 	 * The type of entity.
@@ -96,7 +108,12 @@ class Entity {
 	/**
 	 * The metadata of the entity.
 	 */
-	public readonly metadata = new Set<MetadataDictionary>();
+	public readonly metadata = new Set<DataItem>();
+
+	/**
+	 * The flags of the entity.
+	 */
+	public readonly flags = new Map<ActorFlag, boolean>();
 
 	/**
 	 * The attributes of the entity.
@@ -113,6 +130,11 @@ class Entity {
 	 */
 	public onGround = false;
 
+	/**
+	 * Whether or not the entity is alive.
+	 */
+	public isAlive = true;
+
 	public constructor(
 		identifier: EntityIdentifier,
 		dimension: Dimension,
@@ -121,8 +143,11 @@ class Entity {
 		// Readonly properties
 		this.type = EntityType.get(identifier) as EntityType;
 		this.runtime = Entity.runtime++;
-		this.unique =
-			uniqueId ?? (BigInt(Date.now()) << 32n) | (this.runtime << 4n);
+		this.unique = uniqueId
+			? uniqueId < 0n
+				? -uniqueId >> 32n
+				: uniqueId >> 32n
+			: Entity.runtime;
 
 		// Mutable properties
 		this.dimension = dimension;
@@ -142,9 +167,6 @@ class Entity {
 		// Syncs the entity data
 		this.syncData();
 
-		// Syncs the entity flags
-		this.syncFlags();
-
 		// Syncs the entity attributes
 		this.syncAttributes();
 	}
@@ -163,6 +185,18 @@ class Entity {
 	 */
 	public isItem(): boolean {
 		return this.type.identifier === EntityIdentifier.Item;
+	}
+
+	/**
+	 * Checks if the entity is an NPC.
+	 * @returns Whether or not the entity is an NPC.
+	 */
+	public isNpc(): boolean {
+		// Get the values of the metadata
+		const values = [...this.metadata.values()];
+
+		// Check if the entity has the Has
+		return values.some((value) => value.identifier === ActorDataId.HasNpc);
 	}
 
 	/**
@@ -275,7 +309,7 @@ class Entity {
 			packet.item = ItemStack.toNetworkStack(itemComponent.itemStack);
 			packet.position = this.position;
 			packet.velocity = this.velocity;
-			packet.metadata = [...this.metadata.values()];
+			packet.data = [];
 			packet.fromFishing = false;
 
 			// Send the packet to the player if it exists, otherwise broadcast it to the dimension
@@ -295,11 +329,8 @@ class Entity {
 			packet.headYaw = this.rotation.headYaw;
 			packet.bodyYaw = this.rotation.yaw;
 			packet.attributes = [];
-			packet.metadata = [...this.metadata.values()];
-			packet.properties = {
-				ints: [],
-				floats: []
-			};
+			packet.data = [...this.metadata];
+			packet.properties = new PropertySyncData([], []);
 			packet.links = [];
 
 			// Send the packet to the player if it exists, otherwise broadcast it to the dimension
@@ -318,6 +349,9 @@ class Entity {
 	 * @param player The player to despawn the entity from.
 	 */
 	public despawn(player?: Player): void {
+		// Set the alive property of the entity to false
+		this.isAlive = false;
+
 		// Create a new RemoveEntityPacket
 		const packet = new RemoveEntityPacket();
 
@@ -338,7 +372,39 @@ class Entity {
 	 * Kills the entity, triggering the death animation.
 	 */
 	public kill(): void {
+		// Set the alive property of the entity to false
+		this.isAlive = false;
+
 		// TODO: Implement item drops and experience drops
+
+		// TODO: Check for keep inventory gamerule
+		if (this.hasComponent("minecraft:inventory")) {
+			// Get the inventory component
+			const { container } = this.getComponent("minecraft:inventory");
+
+			// Drop the items from the inventory
+			for (const [slot, item] of container.storage.entries()) {
+				// Check if the item is not valid
+				if (!item) continue;
+
+				// Spawn the item in the dimension
+				this.dimension.spawnItem(item, this.position);
+
+				// Remove the item from the container
+				container.clearSlot(slot);
+			}
+		}
+
+		// Check if the entity has the effects component
+		if (this.hasComponent("minecraft:effects")) {
+			// Get the component
+			const effects = this.getComponent("minecraft:effects");
+
+			// Remove every effect of the player
+			for (const effectType of effects.effects.keys()) {
+				effects.remove(effectType);
+			}
+		}
 
 		// Check if the entity has a health component
 		if (this.hasComponent("minecraft:health")) {
@@ -360,8 +426,8 @@ class Entity {
 		// Broadcast the packet to the dimension
 		this.dimension.broadcast(packet);
 
-		// Delete the entity from the dimension
-		this.dimension.entities.delete(this.unique);
+		// Delete the entity from the dimension if it is not a player
+		if (!this.isPlayer()) this.dimension.entities.delete(this.unique);
 
 		// Trigger the onDespawn method of all applicable components
 		for (const component of this.getComponents()) component.onDespawn?.();
@@ -421,224 +487,28 @@ class Entity {
 	 * Syncs the metadata of the entity.
 	 */
 	public syncData(): void {
-		// Create a new SetEntityDataPacket
-		const packet = new SetEntityDataPacket();
+		// Create a new SetActorDataPacket
+		const packet = new SetActorDataPacket();
 		packet.runtimeEntityId = this.runtime;
 		packet.tick = this.dimension.world.currentTick;
-		packet.metadata = [...this.metadata.values()];
-		packet.properties = {
-			ints: [],
-			floats: []
-		};
+		packet.data = [...this.metadata];
+		packet.properties = new PropertySyncData([], []);
+
+		// Iterate over the flags set on the entity
+		for (const [flag, enabled] of this.flags) packet.setFlag(flag, enabled);
 
 		// Send the packet to the dimension
 		this.dimension.broadcast(packet);
 	}
 
 	/**
-	 * Wheather or not the entity contains the metadata key.
-	 * @param key The metadata key to check.
-	 * @returns Whether or not the entity contains the metadata key.
+	 * Set's if the entity is visible to other's
+	 * @param visibility the value of the entity visibility
 	 */
-	public hasData(key: MetadataKey): boolean {
-		return [...this.metadata.values()].some((data) => data.key === key);
-	}
-
-	/**
-	 * Gets the metadata of the entity.
-	 * @param key The metadata key to get.
-	 * @returns The metadata of the entity.
-	 */
-	public getData(key: MetadataKey): MetadataDictionary | undefined {
-		return [...this.metadata.values()].find((data) => data.key === key);
-	}
-
-	/**
-	 * Gets all the metadata of the entity.
-	 * @returns All the metadata of the entity.
-	 */
-	public getAllData(): Array<MetadataDictionary> {
-		return [...this.metadata.values()].filter((data) => !data.flag);
-	}
-
-	/**
-	 * Adds metadata to the entity.
-	 * @param data The metadata to add.
-	 * @param sync Whether to synchronize the metadata.
-	 */
-	public addData(data: MetadataDictionary, sync = true): void {
-		this.metadata.add(data);
-
-		if (sync) this.syncData();
-	}
-
-	/**
-	 * Sets the metadata of the entity.
-	 * @param key The metadata key to set.
-	 * @param value The value to set.
-	 * @param sync Whether to synchronize the metadata.
-	 */
-	public setData(
-		key: MetadataKey,
-		value: bigint | boolean | number | string,
-		sync = true
-	): void {
-		const data = this.getData(key);
-
-		if (!data) throw new Error(`The entity does not have the ${key} data.`);
-
-		data.value = value;
-
-		if (sync) this.syncData();
-	}
-
-	/**
-	 * Creates metadata for the entity.
-	 * @param key The metadata key to create.
-	 * @param value The value to create.
-	 * @param type The type of the metadata.
-	 * @param sync Whether to synchronize the metadata.
-	 */
-	public createData(
-		key: MetadataKey,
-		value: bigint | boolean | number | string,
-		type: MetadataType,
-		sync = true
-	): void {
-		// Create a new MetadataDictionary
-		const data = new MetadataDictionary(key, type, value);
-
-		// Add the data to the entity
-		this.addData(data, sync);
-	}
-
-	/**
-	 * Removes metadata from the entity.
-	 * @param key The metadata key to remove.
-	 * @param sync Whether to synchronize the metadata.
-	 */
-	public removeData(key: MetadataKey, sync = true): void {
-		// Check if the entity has the metadata key
-		const data = this.getData(key);
-
-		// Check if the data is not found
-		if (!data) return;
-
-		// Remove the data from the entity
-		this.metadata.delete(data);
-
-		// Synchronize the metadata
-		if (sync) this.syncData();
-	}
-
-	/**
-	 * Syncs the metadata flags of the entity.
-	 */
-	public syncFlags(): void {
-		// Create a new SetEntityDataPacket
-		const packet = new SetEntityDataPacket();
-		packet.runtimeEntityId = this.runtime;
-		packet.tick = this.dimension.world.currentTick;
-		packet.metadata = [...this.metadata.values()];
-		packet.properties = {
-			ints: [],
-			floats: []
-		};
-
-		// Send the packet to the dimension
-		this.dimension.broadcast(packet);
-	}
-
-	/**
-	 * Wheather or not the entity contains the metadata flag.
-	 * @param flag The metadata flag to check.
-	 * @returns Whether or not the entity contains the metadata flag.
-	 */
-	public hasFlag(flag: MetadataFlags): boolean {
-		return [...this.metadata.values()].some((data) => data.flag === flag);
-	}
-
-	/**
-	 * Gets the metadata flag of the entity.
-	 * @param flag The metadata flag to get.
-	 * @returns The metadata flag of the entity.
-	 */
-	public getFlag(flag: MetadataFlags): MetadataDictionary | undefined {
-		return [...this.metadata.values()].find((data) => data.flag === flag);
-	}
-
-	/**
-	 * Gets all the metadata flags of the entity.
-	 * @returns All the metadata flags of the entity.
-	 */
-	public getAllFlags(): Array<MetadataDictionary> {
-		return [...this.metadata.values()].filter((data) => data.flag);
-	}
-
-	/**
-	 * Adds a metadata flag to the entity.
-	 * @param data The metadata flag to add.
-	 * @param sync Whether to synchronize the metadata.
-	 */
-	public addFlag(data: MetadataDictionary, sync = true): void {
-		this.metadata.add(data);
-
-		if (sync) this.syncFlags();
-	}
-
-	/**
-	 * Sets the metadata flag of the entity.
-	 * @param flag The metadata flag to set.
-	 * @param value The value to set.
-	 * @param sync Whether to synchronize the metadata.
-	 */
-	public setFlag(flag: MetadataFlags, value: boolean, sync = true): void {
-		const data = this.getFlag(flag);
-
-		if (!data) throw new Error(`The entity does not have the ${flag} flag.`);
-
-		data.value = value;
-
-		if (sync) this.syncFlags();
-	}
-
-	/**
-	 * Creates a metadata flag for the entity.
-	 * @param flag The metadata flag to create.
-	 * @param value The value to create.
-	 * @param type The type of the metadata.
-	 * @param sync Whether to synchronize the metadata.
-	 */
-	public createFlag(flag: MetadataFlags, value: boolean, sync = true): void {
-		// Create a new MetadataDictionary
-		const data = new MetadataDictionary(
-			MetadataKey.Flags,
-			MetadataType.Long,
-			value,
-			flag
-		);
-
-		// Add the data to the entity
-		this.addFlag(data, sync);
-	}
-
-	/**
-	 * Removes a metadata flag from the entity.
-	 * @param flag The metadata flag to remove.
-	 * @param sync Whether to synchronize the metadata.
-	 */
-	public removeFlag(flag: MetadataFlags, sync = true): void {
-		// Check if the entity has the metadata flag
-		const data = this.getFlag(flag);
-
-		// Check if the data is not found
-		if (!data) return;
-
-		// Remove the data from the entity
-		this.metadata.delete(data);
-
-		// Synchronize the metadata
-		if (sync) this.syncFlags();
+	public setVisibility(visibility: boolean): void {
+		const isVisibleComponent = this.getComponent("minecraft:is_visible");
+		if (isVisibleComponent.getCurrentValue() == !visibility) return;
+		isVisibleComponent.setCurrentValue(!visibility, true);
 	}
 
 	/**
@@ -759,6 +629,234 @@ class Entity {
 	}
 
 	/**
+	 * Adds effect to the player
+	 * @param effect The effect to add to the player
+	 */
+	public addEffect(effect: Effect): void {
+		const effects = this.hasComponent("minecraft:effects")
+			? this.getComponent("minecraft:effects")
+			: new EntityEffectsComponent(this);
+		effects.add(effect);
+	}
+
+	/**
+	 * Removes effect to the player
+	 * @param effectType The effect type to remove, if not provided clears all effects
+	 * @returns boolean If the effect was removed
+	 */
+	public removeEffect(effectType: EffectType): boolean {
+		const effects = this.hasComponent("minecraft:effects")
+			? this.getComponent("minecraft:effects")
+			: new EntityEffectsComponent(this);
+		return effects.remove(effectType);
+	}
+
+	/**
+	 * Querys if the player has an effect
+	 * @param effectType The effect type to query
+	 * @returns boolean If the effect was found
+	 */
+	public hasEffect(effectType: EffectType): boolean {
+		const effects = this.hasComponent("minecraft:effects")
+			? this.getComponent("minecraft:effects")
+			: new EntityEffectsComponent(this);
+
+		return effects.has(effectType);
+	}
+
+	/**
+	 * Get's all the effects that the player has
+	 * @returns EffectType[] The effect list of the player
+	 */
+	public getEffects(): Array<EffectType> {
+		const effects = this.hasComponent("minecraft:effects")
+			? this.getComponent("minecraft:effects")
+			: new EntityEffectsComponent(this);
+		return [...effects.effects.keys()];
+	}
+
+	/**
+	 * Gets the health of the entity.
+	 * @note This method is dependant on the entity having a `minecraft:health` component, if not will result in an `error`.
+	 * @returns The health of the entity.
+	 */
+	public getHealth(): number {
+		// Check if the entity has a health component
+		if (!this.hasComponent("minecraft:health"))
+			throw new Error("The entity does not have a health component.");
+
+		// Get the health component
+		const health = this.getComponent("minecraft:health");
+
+		// Return the current health value
+		return health.getCurrentValue();
+	}
+
+	/**
+	 * Sets the health of the entity.
+	 * @note This method is dependant on the entity having a `minecraft:health` component, if the component does not exist it will be created.
+	 * @param health The health to set.
+	 */
+	public setHealth(health: number): void {
+		// Check if the entity has a health component
+		if (!this.hasComponent("minecraft:health")) new EntityHealthComponent(this);
+
+		// Get the health component
+		const healthComponent = this.getComponent("minecraft:health");
+
+		// Set the health value
+		healthComponent.setCurrentValue(health);
+	}
+
+	/**
+	 * Applies damage to the entity.
+	 * @note This method is dependant on the entity having a `minecraft:health` component, if not will result in an `error`.
+	 * @param damage The amount of damage to apply to the entity.
+	 */
+	public applyDamage(damage: number, damageCause?: ActorDamageCause): void {
+		// Check if the entity has a health component
+		if (!this.hasComponent("minecraft:health"))
+			throw new Error("The entity does not have a health component.");
+
+		// Get the health component
+		const health = this.getComponent("minecraft:health");
+
+		// Apply the damage to the entity
+		health.applyDamage(damage, damageCause);
+	}
+
+	/**
+	 * Geta the nametag of the entity.
+	 * @note This method is dependant on the entity having a `minecraft:nametag` component, if not will result in an `error`.
+	 * @returns The nametag of the entity.
+	 */
+	public getNametag(): string {
+		// Check if the entity has a nametag component
+		if (!this.hasComponent("minecraft:nametag"))
+			throw new Error("The entity does not have a nametag component.");
+
+		// Get the nametag component
+		const nametag = this.getComponent("minecraft:nametag");
+
+		// Return the current nametag value
+		return nametag.getCurrentValue();
+	}
+
+	/**
+	 * Sets the nametag of the entity.
+	 * @note This method is dependant on the entity having a `minecraft:nametag` component, if the component does not exist it will be created.
+	 * @param nametag The nametag to set.
+	 */
+	public setNametag(nametag: string, alwaysVisible = false): void {
+		// Check if the entity has a nametag component
+		if (!this.hasComponent("minecraft:nametag"))
+			new EntityNametagComponent(this);
+
+		// Check if the entity should always show the nametag
+		if (alwaysVisible && !this.hasComponent("minecraft:always_show_nametag"))
+			new EntityAlwaysShowNametagComponent(this);
+
+		// Check if the entity should not always show the nametag
+		if (!alwaysVisible && this.hasComponent("minecraft:always_show_nametag")) {
+			// Get the always show nametag component
+			const component = this.getComponent("minecraft:always_show_nametag");
+
+			// Set the current value to false
+			component.setCurrentValue(0);
+
+			// Remove the component
+			this.removeComponent("minecraft:always_show_nametag");
+		}
+
+		// Get the nametag component
+		const nametagComponent = this.getComponent("minecraft:nametag");
+
+		// Set the nametag value
+		nametagComponent.setCurrentValue(nametag);
+	}
+
+	/**
+	 * Sets the entity on fire.
+	 * @note This method is dependant on the entity having a `minecraft:on_fire` component, if the component does not exist it will be created.
+	 */
+	public setOnFire(ticks?: number): void {
+		// Check if the entity has an on fire component
+		if (this.hasComponent("minecraft:on_fire")) {
+			// Get the on fire component
+			const component = this.getComponent("minecraft:on_fire");
+
+			// Set the remaining ticks
+			component.onFireRemainingTicks = ticks ?? 300;
+
+			// Set the entity on fire
+			component.setCurrentValue(true);
+		} else {
+			// Create a new on fire component
+			const component = new EntityOnFireComponent(this);
+
+			// Set the remaining ticks
+			component.onFireRemainingTicks = ticks ?? 300;
+
+			// Set the entity on fire
+			component.setCurrentValue(true);
+		}
+	}
+
+	/**
+	 * Extinguishes the entity from fire.
+	 * @note This method is dependant on the entity having a `minecraft:on_fire` component, if the component does not exist it will result in an `error`.
+	 */
+	public extinguishFire(): void {
+		// Check if the entity has an on fire
+		if (!this.hasComponent("minecraft:on_fire"))
+			throw new Error("The entity does not have an on fire component.");
+
+		// Get the on fire component
+		const component = this.getComponent("minecraft:on_fire");
+
+		// Set the entity on fire
+		component.setCurrentValue(false);
+
+		// Remove the component as the entity is no longer on fire
+		// This will reduce unnecessary ticking
+		this.removeComponent("minecraft:on_fire");
+	}
+
+	/**
+	 * Gets the variant of the entity.
+	 * @note This method is dependant on the entity having a `minecraft:variant` component, if not will result in an `error`.
+	 * @returns The variant of the entity.
+	 */
+	public getVariant(): number {
+		// Check if the entity has a variant component
+		if (!this.hasComponent("minecraft:variant"))
+			throw new Error("The entity does not have a variant component.");
+
+		// Get the variant component
+		const variant = this.getComponent("minecraft:variant");
+
+		// Return the current variant value
+		return variant.getCurrentValue();
+	}
+
+	/**
+	 * Sets the variant of the entity.
+	 * @note This method is dependant on the entity having a `minecraft:variant` component, if the component does not exist it will be created.
+	 * @param variant The variant to set.
+	 */
+	public setVariant(variant: number): void {
+		// Check if the entity has a variant component
+		if (!this.hasComponent("minecraft:variant"))
+			new EntityVariantComponent(this);
+
+		// Get the variant component
+		const variantComponent = this.getComponent("minecraft:variant");
+
+		// Set the variant value
+		variantComponent.setCurrentValue(variant);
+	}
+
+	/**
 	 * Gets the cardinal direction of the entity.
 	 * @returns The cardinal direction of the entity.
 	 */
@@ -787,6 +885,10 @@ class Entity {
 		this.velocity.x = vector?.x ?? this.velocity.x;
 		this.velocity.y = vector?.y ?? this.velocity.y;
 		this.velocity.z = vector?.z ?? this.velocity.z;
+
+		this.position.x += this.velocity.x;
+		this.position.y += this.velocity.y;
+		this.position.z += this.velocity.z;
 
 		// Set the onGround property of the entity
 		this.onGround = false;
@@ -824,6 +926,20 @@ class Entity {
 		this.velocity.x = 0;
 		this.velocity.y = 0;
 		this.velocity.z = 0;
+
+		// Set the motion of the entity
+		this.setMotion();
+	}
+
+	/**
+	 * Applies an impulse to the entity.
+	 * @param vector The impulse to apply.
+	 */
+	public applyImpulse(vector: Vector3f): void {
+		// Update the velocity of the entity
+		this.velocity.x += vector.x;
+		this.velocity.y += vector.y;
+		this.velocity.z += vector.z;
 
 		// Set the motion of the entity
 		this.setMotion();

@@ -5,15 +5,16 @@ import {
 	type DimensionType,
 	TextPacket,
 	TextPacketType,
-	type Vector3f
+	Vector3f
 } from "@serenityjs/protocol";
 import { CommandExecutionState, type CommandResult } from "@serenityjs/command";
 import { EntityIdentifier } from "@serenityjs/entity";
 
 import { Entity } from "../entity";
-import { Player, PlayerStatus } from "../player";
+import { Player } from "../player";
 import { Block } from "../block";
 import {
+	BlockComponent,
 	EntityComponent,
 	EntityItemComponent,
 	EntityPhysicsComponent
@@ -98,53 +99,51 @@ class Dimension {
 	 * Ticks the dimension instance.
 	 */
 	public tick(): void {
-		// TODO: Remove tick from the player
-		// Tick all the players in the dimension
-		for (const player of this.getPlayers()) player.tick();
+		// Return if there are no players in the dimension
+		if (this.getPlayers().length === 0) return;
 
-		// Get all the simulation chunks
-		const chunks = new Set(
-			this.getPlayers().flatMap((player) =>
-				player.getChunks(this.simulationDistance)
-			)
-		);
+		// Iterate over all the players in the dimension
+		for (const player of this.getPlayers()) {
+			// Tick all the tickable player components
+			for (const component of player.components.values()) component.onTick?.();
 
-		// Tick all the tickable block components
-		for (const block of this.blocks.values()) {
-			// Convert the block position to a chunk coordinate
-			const x = block.position.x >> 4;
-			const z = block.position.z >> 4;
+			// Iterate over all the entities, and check if the entity is in simulation range
+			for (const entity of this.entities.values()) {
+				// Check if the entity is a player
+				if (entity instanceof Player) continue;
 
-			// Check if the chunk is loaded
-			const hash = ChunkCoords.hash({ x, z });
-			if (!chunks.has(hash)) continue;
-			// Tick all the tickable block components
-			for (const component of block.components.values()) {
-				// Tick the component
-				component.onTick?.();
+				// Get the players and entities position
+				const playerPos = player.position;
+				const entityPos = entity.position;
+
+				// Calulate the distance between the player and the entity
+				const distance = playerPos.distance(entityPos);
+
+				// Check if the entity is in simulation range
+				if (distance > this.simulationDistance) continue;
+
+				// Tick all the tickable entity components
+				for (const component of entity.components.values())
+					component.onTick?.();
 			}
-		}
 
-		// Tick all the tickable entity components
-		for (const entity of this.entities.values()) {
-			// Floor the entity position
-			const position = entity.position.floor();
+			// Iterate over all the blocks, and check if the block is in simulation range
+			for (const block of this.blocks.values()) {
+				// Get the block cords from the block
+				const { x, y, z } = block.position;
 
-			// Convert the entity position to a chunk coordinate
-			const x = position.x >> 4;
-			const z = position.z >> 4;
+				// Get the players and blocks position
+				const playerPos = player.position;
+				const blockPos = new Vector3f(x, y, z);
 
-			// Check if the chunk is loaded
-			const hash = ChunkCoords.hash({ x, z });
-			if (!chunks.has(hash)) continue;
+				// Calulate the distance between the player and the block
+				const distance = playerPos.distance(blockPos);
 
-			// Check if the entity is a player and is not spawned
-			if (entity.isPlayer() && entity.status !== PlayerStatus.Spawned) continue;
+				// Check if the block is in simulation range
+				if (distance > this.simulationDistance) continue;
 
-			// Tick all the tickable entity components
-			for (const component of entity.components.values()) {
-				// Tick the component
-				component.onTick?.();
+				// Tick all the tickable block components
+				for (const component of block.components.values()) component.onTick?.();
 			}
 		}
 	}
@@ -326,6 +325,21 @@ class Dimension {
 			// Convert the permutation to a block.
 			const block = new Block(this, permutation, { x, y, z });
 
+			// Register the components to the block.
+			for (const component of BlockComponent.registry.get(
+				permutation.type.identifier
+			) ?? [])
+				new component(block, component.identifier);
+
+			// Register the components that are type specific.
+			for (const identifier of permutation.type.components) {
+				// Get the component from the registry
+				const component = BlockComponent.components.get(identifier);
+
+				// Check if the component exists.
+				if (component) new component(block, identifier);
+			}
+
 			// If the block has components add it to the blocks
 			if (block.components.size > 0) this.blocks.set(position, block);
 
@@ -398,6 +412,9 @@ class Dimension {
 	public spawnEntity(identifier: EntityIdentifier, position: Vector3f): Entity {
 		// Create a new Entity instance
 		const entity = new Entity(identifier, this);
+
+		// Apply physics to the entity
+		new EntityPhysicsComponent(entity);
 
 		// Register all valid components to the entity
 		for (const identifier of entity.type.components) {

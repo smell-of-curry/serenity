@@ -1,8 +1,9 @@
+import { ByteTag, CompoundTag, IntTag, StringTag } from "@serenityjs/nbt";
+
 import { BlockType } from "./type";
 import { BlockState } from "./types";
 import { hash } from "./hash";
-
-import type { BlockIdentifier } from "./enums";
+import { BlockIdentifier } from "./enums";
 
 /**
  * BlockPermutation represents a current state of a block, for example dirt has a single state "dirt_type". This state can be changed to "coarse" or "normal" to represent a different state of dirt. This means dirt has a total of 2 permutations, one for "coarse" and one for "normal".
@@ -95,14 +96,25 @@ class BlockPermutation<T extends keyof BlockState = keyof BlockState> {
 		const type = BlockType.types.get(identifier as BlockIdentifier);
 
 		// Check if the block type exists.
-		if (!type) {
-			throw new Error(`Block type ${identifier} does not exist`);
-		}
+		if (!type) return this.resolve(BlockIdentifier.Air) as BlockPermutation<T>;
 
 		// Check if the state is not provided.
 		const permutation = type.permutations.find((permutation) => {
 			for (const key in state) {
-				if ((permutation.state as never)[key] !== state[key]) {
+				// Get the value of the block state.
+				const value = (permutation.state as never)[key];
+
+				// Check if the value is a boolean
+				const bool = value === true || value === false ? true : false;
+
+				// Convert the state to a boolean if it is a boolean.
+				const query =
+					bool && (state[key] === 0 || state[key] === 1)
+						? state[key] === 1
+						: state[key];
+
+				// Check if the block state matches
+				if (value !== query) {
 					return false;
 				}
 			}
@@ -142,6 +154,52 @@ class BlockPermutation<T extends keyof BlockState = keyof BlockState> {
 
 		// Return the block permutation.
 		return permutation;
+	}
+
+	public static toNbt(permutation: BlockPermutation): CompoundTag<unknown> {
+		const nbt = new CompoundTag("", {});
+
+		const name = new StringTag("name", permutation.type.identifier);
+
+		const states = new CompoundTag("states", {});
+
+		const keys = Object.keys(permutation.state);
+		const values = Object.values(permutation.state);
+
+		for (const [index, key] of keys.entries()) {
+			const value = values[index];
+
+			switch (typeof value) {
+				case "number": {
+					states.addTag(new IntTag(key, value));
+					break;
+				}
+
+				case "string": {
+					states.addTag(new StringTag(key, value));
+					break;
+				}
+
+				case "boolean": {
+					states.addTag(new ByteTag(key, value ? 1 : 0));
+					break;
+				}
+			}
+		}
+
+		nbt.addTag(name);
+		nbt.addTag(states);
+
+		return nbt;
+	}
+
+	public static fromNbt(nbt: CompoundTag<unknown>): BlockPermutation {
+		const name = nbt.getTag("name") as StringTag;
+		const states = nbt.getTag("states") as CompoundTag<unknown>;
+
+		const state = states.valueOf() as Record<string, string | number | boolean>;
+
+		return BlockPermutation.resolve(name.value as BlockIdentifier, state);
 	}
 }
 

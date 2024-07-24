@@ -210,6 +210,9 @@ class FileSystemProvider extends WorldProvider {
 				// Set the dirty flag to false.
 				chunk.dirty = false;
 			}
+
+			// Delete the chunks from the map.
+			this.chunks.delete(identifier);
 		}
 	}
 
@@ -245,7 +248,7 @@ class FileSystemProvider extends WorldProvider {
 			);
 
 			// Deserialize the chunk.
-			const chunk = Chunk.deserialize(dimension.type, cx, cz, buffer);
+			const chunk = Chunk.deserialize(dimension.type, cx, cz, buffer, true);
 
 			// Set the chunk in the chunks map.
 			chunks.set(hash, chunk);
@@ -292,7 +295,7 @@ class FileSystemProvider extends WorldProvider {
 				"chunks",
 				`${chunk.x}.${chunk.z}.bin`
 			),
-			Chunk.serialize(chunk)
+			Chunk.serialize(chunk, true)
 		);
 	}
 }

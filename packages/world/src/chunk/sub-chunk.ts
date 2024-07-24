@@ -1,6 +1,6 @@
-import { BlockStorage } from "./block-storage";
+import { BinaryStream } from "@serenityjs/binarystream";
 
-import type { BinaryStream } from "@serenityjs/binarystream";
+import { BlockStorage } from "./block-storage";
 
 /**
  * Represents a sub chunk.
@@ -17,13 +17,18 @@ export class SubChunk {
 	public readonly layers: Array<BlockStorage>;
 
 	/**
+	 * The index of the sub chunk.
+	 */
+	public index: number | null = null;
+
+	/**
 	 * Creates a new sub chunk.
 	 *
 	 * @param version The version of the sub chunk.
 	 * @param layers The layers of the sub chunk.
 	 */
 	public constructor(version?: number, layers?: Array<BlockStorage>) {
-		this.version = version ?? 8;
+		this.version = version ?? 9;
 		this.layers = layers ?? [];
 	}
 
@@ -110,17 +115,31 @@ export class SubChunk {
 	 *
 	 * @param stream The binary stream to write to.
 	 */
-	public static serialize(subchunk: SubChunk, stream: BinaryStream): void {
+	public static serialize(
+		subchunk: SubChunk,
+		stream: BinaryStream,
+		nbt = false
+	): void {
 		// Write the version.
 		stream.writeUint8(subchunk.version);
 
 		// Write the storage count.
 		stream.writeUint8(subchunk.layers.length);
 
+		// Write the index.
+		if (subchunk.version === 9) {
+			// Check if the index is null.
+			if (subchunk.index === null)
+				throw new Error("SubChunk index is null for format version 9");
+
+			// Write the index.
+			stream.writeInt8(subchunk.index);
+		}
+
 		// Loop through each storage and serialize it.
 		for (const storage of subchunk.layers) {
 			// Serialize the storage.
-			BlockStorage.serialize(storage, stream);
+			BlockStorage.serialize(storage, stream, nbt);
 		}
 	}
 
@@ -129,20 +148,38 @@ export class SubChunk {
 	 *
 	 * @param stream The binary stream to read from.
 	 */
-	public static deserialize(stream: BinaryStream): SubChunk {
+	public static deserialize(stream: BinaryStream, nbt = false): SubChunk {
 		// Read the version.
 		const version = stream.readUint8();
 
 		// Read the storage count.
 		const count = stream.readUint8();
 
+		// Read the index if the version is 9.
+		let index = null;
+		if (version === 9) {
+			index = stream.readInt8();
+		}
+
 		// Loop through each storage and deserialize it.
 		const layers: Array<BlockStorage> = [];
 		for (let index = 0; index < count; index++) {
-			layers.push(BlockStorage.deserialize(stream));
+			layers.push(BlockStorage.deserialize(stream, nbt));
 		}
 
+		// Create a new sub chunk.
+		const subchunk = new SubChunk(version, layers);
+		subchunk.index = index;
+
 		// Return the sub chunk.
-		return new SubChunk(version, layers);
+		return subchunk;
+	}
+
+	public static from(buffer: Buffer, nbt = false): SubChunk {
+		// Create a new stream.
+		const stream = new BinaryStream(buffer);
+
+		// Deserialize the sub chunk.
+		return SubChunk.deserialize(stream, nbt);
 	}
 }

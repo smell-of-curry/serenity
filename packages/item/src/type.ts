@@ -20,6 +20,16 @@ class ItemType<T extends keyof Items = keyof Items> {
 	public readonly network: number;
 
 	/**
+	 * Whether the item type is stackable.
+	 */
+	public readonly stackable: boolean;
+
+	/**
+	 * The maximum stack size of the item type.
+	 */
+	public readonly maxAmount: number;
+
+	/**
 	 * The block of the item type, if acclicable.
 	 */
 	public readonly block: Items[T];
@@ -28,10 +38,21 @@ class ItemType<T extends keyof Items = keyof Items> {
 	 * Create a new item type.
 	 * @param identifier The identifier of the item type.
 	 * @param network The network of the item type.
+	 * @param stackable Whether the item type is stackable.
+	 * @param maxAmount The maximum stack size of the item type.
+	 * @param block The block of the item type.
 	 */
-	public constructor(identifier: T, network: number, block?: Items[T]) {
+	public constructor(
+		identifier: T,
+		network: number,
+		stackable?: boolean,
+		maxAmount?: number,
+		block?: Items[T]
+	) {
 		this.identifier = identifier;
 		this.network = network;
+		this.stackable = stackable ?? true;
+		this.maxAmount = maxAmount ?? 64;
 		this.block =
 			block ??
 			(BlockType.get(identifier as unknown as BlockIdentifier) as Items[T]);

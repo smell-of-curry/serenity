@@ -22,6 +22,7 @@ enum Packet {
 	UpdateBlock = 0x15, // 21
 	LevelEvent = 0x19, // 25
 	ActorEvent = 0x1b, // 27
+	MobEffect = 0x1c, // 28
 	// TickSync = 0x17, // 23
 	UpdateAttributes = 0x1d, // 29
 	InventoryTransaction = 0x1e, // 30
@@ -29,7 +30,7 @@ enum Packet {
 	Interact = 0x21, // 33
 	BlockPickRequest = 0x22, // 34
 	PlayerAction = 0x24, // 36
-	SetEntityData = 0x27, // 39
+	SetActorData = 0x27, // 39
 	SetActorMotion = 0x28, // 40
 	// SetSpawnPosition = 0x2b, // 43
 	Animate = 0x2c, // 44
@@ -58,6 +59,8 @@ enum Packet {
 	Transfer = 0x55, // 85
 	SetTitle = 0x58, // 88
 	PlayerSkin = 0x5d, // 93
+	BookEdit = 0x61, // 97
+	NpcRequest = 0x62, // 98
 	ModalFormRequest = 0x64, // 100
 	ModalFormResponse = 0x65, // 101
 	RemoveObjective = 0x6a, // 106
@@ -71,6 +74,7 @@ enum Packet {
 	LevelSoundEvent = 0x7b, // 123
 	// ClientCacheStatus = 0x81, // 129
 	Emote = 0x8a, // 138
+	CompletedUsingItem = 0x8e, // 142
 	NetworkSettings = 0x8f, // 143
 	PlayerAuthInput = 0x90, // 144
 	// PlayerAuthInput = 0x90, // 144
@@ -80,6 +84,7 @@ enum Packet {
 	EmoteList = 0x98, // 152
 	PacketViolationWarning = 0x9c, // 156
 	AnimateEntity = 0x9e, // 158
+	CameraShake = 0x9f, // 159
 	ItemComponent = 0xa2, // 162
 	NpcDialogue = 0xa9, // 169
 	ScriptMessage = 0xb1, // 177
@@ -88,8 +93,12 @@ enum Packet {
 	UpdateAdventureSettings = 0xbc, // 188
 	DeathInfo = 0xbd, // 189
 	RequestNetworkSettings = 0xc1, // 193
+	OpenSign = 0x1_2f, // 303
+	SetPlayerInventoryOptions = 0x1_33, // 307
 	SetHud = 0x1_34, // 308
-	AwardAchievement = 0x1_35 // 309
+	AwardAchievement = 0x1_35, // 309
+	ClientboundCloseForm = 0x1_36, // 310
+	ServerboundLoadingScreenPacket = 0x1_38 // 312
 }
 
 export { Packet };

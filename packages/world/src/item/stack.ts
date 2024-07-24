@@ -32,6 +32,16 @@ class ItemStack<T extends keyof Items = keyof Items> {
 	public readonly nbt = new CompoundTag("", {});
 
 	/**
+	 * If the item stack is stackable.
+	 */
+	public readonly stackable: boolean;
+
+	/**
+	 * The maximum stack size of the item stack.
+	 */
+	public readonly maxAmount: number;
+
+	/**
 	 * The container of the item stack.
 	 */
 	public container: Container | null = null;
@@ -50,6 +60,8 @@ class ItemStack<T extends keyof Items = keyof Items> {
 	public constructor(identifier: T, amount: number, metadata?: number) {
 		this.type = ItemType.get(identifier) as ItemType<T>;
 		this.metadata = metadata ?? 0;
+		this.stackable = this.type.stackable;
+		this.maxAmount = this.type.maxAmount;
 		this.amount = amount;
 
 		// Register the type components to the item.
@@ -106,6 +118,20 @@ class ItemStack<T extends keyof Items = keyof Items> {
 	}
 
 	/**
+	 * Checks if the item stack is equal to another item stack.
+	 * @param item The item stack to compare.
+	 * @returns If the item stack is equal to the other item stack.
+	 */
+	public equals(item: ItemStack): boolean {
+		// TODO: Check if the item nbts are equal, and if the item components are equal.
+
+		return (
+			this.type.identifier === item.type.identifier &&
+			this.metadata === item.metadata
+		);
+	}
+
+	/**
 	 * Gets a component from the item.
 	 * @param identifier The identifier of the component.
 	 * @returns The component that was found.
@@ -134,6 +160,17 @@ class ItemStack<T extends keyof Items = keyof Items> {
 		this.components.set(component.identifier, component);
 
 		return component;
+	}
+
+	/**
+	 * Checks if the item has a component.
+	 * @param identifier The identifier of the component.
+	 * @returns Whether or not the item has the component.
+	 */
+	public hasComponent<K extends keyof ItemComponents<T>>(
+		identifier: K
+	): boolean {
+		return this.components.has(identifier);
 	}
 
 	/**

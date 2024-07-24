@@ -56,7 +56,7 @@ import type {
 	ScriptMessagePacket,
 	SetActorMotionPacket,
 	SetCommandsEnabledPacket,
-	SetEntityDataPacket,
+	SetActorDataPacket,
 	SetLocalPlayerAsInitializedPacket,
 	SetPlayerGameTypePacket,
 	SetTitlePacket,
@@ -82,7 +82,16 @@ import type {
 	PlayerSkinPacket,
 	BlockActorDataPacket,
 	AwardAchievementPacket,
-	ServerToClientHandshakePacket
+	ServerToClientHandshakePacket,
+	ClientboundCloseFormPacket,
+	MobEffectPacket,
+	SetPlayerInventoryOptionsPacket,
+	CompletedUsingItemPacket,
+	NpcRequestPacket,
+	OpenSignPacket,
+	ServerboundLoadingScreenPacketPacket,
+	CameraShakePacket,
+	BookEditPacket
 } from "@serenityjs/protocol";
 import type { NetworkPacketEvent } from "./packet-event";
 
@@ -118,11 +127,14 @@ interface NetworkEvents {
 	[Packet.InventoryTransaction]: [
 		NetworkPacketEvent<InventoryTransactionPacket>
 	];
+	[Packet.CompletedUsingItem]: [NetworkPacketEvent<CompletedUsingItemPacket>];
 	[Packet.MobEquipment]: [NetworkPacketEvent<MobEquipmentPacket>];
+	[Packet.MobEffect]: [NetworkPacketEvent<MobEffectPacket>];
 	[Packet.Interact]: [NetworkPacketEvent<InteractPacket>];
 	[Packet.BlockPickRequest]: [NetworkPacketEvent<BlockPickRequestPacket>];
+	[Packet.BookEdit]: [NetworkPacketEvent<BookEditPacket>];
 	[Packet.PlayerAction]: [NetworkPacketEvent<PlayerActionPacket>];
-	[Packet.SetEntityData]: [NetworkPacketEvent<SetEntityDataPacket>];
+	[Packet.SetActorData]: [NetworkPacketEvent<SetActorDataPacket>];
 	[Packet.SetActorMotion]: [NetworkPacketEvent<SetActorMotionPacket>];
 	[Packet.Animate]: [NetworkPacketEvent<AnimatePacket>];
 	[Packet.Respawn]: [NetworkPacketEvent<RespawnPacket>];
@@ -155,6 +167,9 @@ interface NetworkEvents {
 	[Packet.Transfer]: [NetworkPacketEvent<TransferPacket>];
 	[Packet.SetTitle]: [NetworkPacketEvent<SetTitlePacket>];
 	[Packet.PlayerSkin]: [NetworkPacketEvent<PlayerSkinPacket>];
+	[Packet.NpcRequest]: [NetworkPacketEvent<NpcRequestPacket>];
+	[Packet.OpenSign]: [NetworkPacketEvent<OpenSignPacket>];
+	[Packet.CameraShake]: [NetworkPacketEvent<CameraShakePacket>];
 	[Packet.ModalFormRequest]: [NetworkPacketEvent<ModalFormRequestPacket>];
 	[Packet.ModalFormResponse]: [NetworkPacketEvent<ModalFormResponsePacket>];
 	[Packet.RemoveObjective]: [NetworkPacketEvent<RemoveObjectivePacket>];
@@ -195,8 +210,17 @@ interface NetworkEvents {
 	[Packet.RequestNetworkSettings]: [
 		NetworkPacketEvent<RequestNetworkSettingsPacket>
 	];
+	[Packet.SetPlayerInventoryOptions]: [
+		NetworkPacketEvent<SetPlayerInventoryOptionsPacket>
+	];
 	[Packet.SetHud]: [NetworkPacketEvent<SetHudPacket>];
 	[Packet.AwardAchievement]: [NetworkPacketEvent<AwardAchievementPacket>];
+	[Packet.ClientboundCloseForm]: [
+		NetworkPacketEvent<ClientboundCloseFormPacket>
+	];
+	[Packet.ServerboundLoadingScreenPacket]: [
+		NetworkPacketEvent<ServerboundLoadingScreenPacketPacket>
+	];
 }
 
 export { NetworkEvents };
