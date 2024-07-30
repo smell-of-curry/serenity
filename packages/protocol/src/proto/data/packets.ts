@@ -94,6 +94,8 @@ import { OpenSignPacket } from "./open-sign";
 import { ServerboundLoadingScreenPacketPacket } from "./server-bound-loading-screen";
 import { CameraShakePacket } from "./camera-shake";
 import { BookEditPacket } from "./book-edit";
+import { PlayerStartItemCooldownPacket } from "./player-start-item-cooldown";
+import { CraftingDataPacket } from "./crafting-data";
 
 const Packets = {
 	[Packet.Login]: LoginPacket, // 1
@@ -132,6 +134,7 @@ const Packets = {
 	[Packet.PlayerHotbar]: PlayerHotbarPacket, // 48
 	[Packet.InventoryContent]: InventoryContentPacket, // 49
 	[Packet.InventorySlot]: InventorySlotPacket, // 50
+	[Packet.CraftingData]: CraftingDataPacket, // 52
 	[Packet.BlockActorData]: BlockActorDataPacket, // 56
 	[Packet.LevelChunk]: LevelChunkPacket, // 58
 	[Packet.SetCommandsEnabled]: SetCommandsEnabledPacket, // 59
@@ -176,6 +179,7 @@ const Packets = {
 	[Packet.CameraShake]: CameraShakePacket, // 159
 	[Packet.ItemComponent]: ItemComponentPacket, // 162
 	[Packet.NpcDialogue]: NpcDialoguePacket, // 169
+	[Packet.PlayerStartItemCooldown]: PlayerStartItemCooldownPacket, // 176
 	[Packet.ScriptMessage]: ScriptMessagePacket, // 177
 	[Packet.ToastRequest]: ToastRequestPacket, // 186
 	[Packet.UpdateAbilities]: UpdateAbilitiesPacket, // 187
