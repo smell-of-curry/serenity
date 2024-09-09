@@ -1,21 +1,17 @@
 import {
 	DisconnectReason,
 	LoginPacket,
+	type ClientData,
+	type IdentityData,
+	type LoginTokenData,
 	type LoginTokens,
 	PlayStatus,
 	PlayStatusPacket,
 	ResourcePacksInfoPacket,
-	SerializedSkin,
-	SkinImage,
 	TexturePackInfo
 } from "@serenityjs/protocol";
 import { createDecoder } from "fast-jwt";
-import {
-	type ClientData,
-	type IdentityData,
-	type LoginTokenData,
-	Player
-} from "@serenityjs/world";
+import { Player, PlayerJoinSignal } from "@serenityjs/world";
 import { Reliability } from "@serenityjs/raknet";
 
 import { SerenityHandler } from "./serenity-handler";
@@ -37,14 +33,15 @@ class Login extends SerenityHandler {
 		// Decode the tokens given by the client.
 		// This contains the client data, identity data, and public key.
 		// Along with the players XUID, display name, and uuid.
-		const data = this.decode(packet.tokens);
+		const tokens = this.decode(packet.tokens);
 
 		// Get the clients xuid and username.
-		const xuid = data.identityData.XUID;
-		const username = data.identityData.displayName;
+		const xuid = tokens.identityData.XUID;
+		const uuid = tokens.identityData.identity;
+		const username = tokens.identityData.displayName;
 
 		// TODO: This is a temporary solution to the reliability and channel issue.
-		session.reliablity = Reliability.UnreliableSequenced;
+		session.reliablity = Reliability.Reliable;
 
 		// Check if the xuid is smaller than 16 characters.
 		// If so then the xuid is invalid.
@@ -92,60 +89,32 @@ class Login extends SerenityHandler {
 		// Get the permission level of the player.
 		const permission = this.serenity.permissions.get(xuid, username);
 
-		const {
-			SkinId,
-			PlayFabId,
-			SkinResourcePatch,
-			SkinImageWidth,
-			SkinImageHeight,
-			SkinData,
-			CapeImageWidth,
-			CapeImageHeight,
-			CapeData,
-			SkinGeometryData,
-			SkinGeometryDataEngineVersion,
-			SkinAnimationData,
-			CapeId,
-			ArmSize,
-			SkinColor,
-			PremiumSkin,
-			PersonaSkin,
-			CapeOnClassicSkin,
-			TrustedSkin,
-			OverrideSkin
-		} = data.clientData;
-
-		const skinImage = new SkinImage(SkinImageWidth, SkinImageHeight, SkinData);
-		const capeImage = new SkinImage(CapeImageWidth, CapeImageHeight, CapeData);
-
-		const skin = new SerializedSkin(
-			SkinId,
-			PlayFabId,
-			SkinResourcePatch,
-			skinImage,
-			[],
-			capeImage,
-			SkinGeometryData,
-			SkinGeometryDataEngineVersion,
-			SkinAnimationData,
-			CapeId,
-			SkinId,
-			ArmSize,
-			SkinColor,
-			[],
-			[],
-			PremiumSkin,
-			PersonaSkin,
-			CapeOnClassicSkin,
-			TrustedSkin,
-			OverrideSkin
-		);
+		// Create the options for the player
+		const options = { session, permission, tokens };
 
 		// Create a new player instance.
 		// Since we have gotten the players login data, we can create a new player instance.
 		// We will also add the player to the players map.
-		const player = new Player(session, data, dimension, permission, skin);
+		const player = world.provider.hasPlayer(uuid)
+			? (Player.deserialize(
+					world.provider.readPlayer(uuid),
+					dimension,
+					options
+				) as Player)
+			: new Player(dimension, options);
+
+		// Set the players xuid and username.
 		this.serenity.players.set(xuid, player);
+
+		// Create the player join signal and emit it.
+		const signal = new PlayerJoinSignal(player).emit();
+
+		// Check if the player join signal was cancelled.
+		if (!signal)
+			return session.disconnect(
+				"Failed to join the server.",
+				DisconnectReason.Kicked
+			);
 
 		// TODO: Enable encryption, the public key is given in the tokens
 		// This is with the ClientToSeverHandshake packet & the ServerToClientHandshake packet
@@ -172,7 +141,8 @@ class Login extends SerenityHandler {
 				pack.originalSize,
 				pack.selectedSubpack,
 				pack.uuid,
-				pack.version
+				pack.version,
+				false
 			);
 
 			packs.texturePacks.push(packInfo);

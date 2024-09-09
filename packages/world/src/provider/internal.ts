@@ -1,5 +1,3 @@
-import { basename } from "node:path";
-
 import { ChunkCoords, DimensionType } from "@serenityjs/protocol";
 
 import { type Dimension, World } from "../world";
@@ -7,6 +5,8 @@ import { Superflat } from "../generator";
 
 import { WorldProvider } from "./provider";
 
+import type { Player } from "../player";
+import type { WorldConfig } from "../types";
 import type { Chunk } from "../chunk";
 
 /**
@@ -21,12 +21,11 @@ class InternalProvider extends WorldProvider {
 	 */
 	public readonly chunks: Map<string, Map<bigint, Chunk>> = new Map();
 
-	public static initialize(path: string): World {
-		// Make the world name the directory name.
-		const name = basename(path);
-
+	public static initialize(config: WorldConfig): World {
 		// Create the world.
-		const world = new World(name, new this());
+		const world = new World(config.identifier, new this());
+
+		// TODO: Register custom dimensions.
 
 		// Create the overworld dimension.
 		world.createDimension(
@@ -79,6 +78,10 @@ class InternalProvider extends WorldProvider {
 
 		// Set the chunk.
 		chunks.set(ChunkCoords.hash({ x: chunk.x, z: chunk.z }), chunk);
+	}
+
+	public writePlayer(_player: Player): void {
+		return;
 	}
 }
 

@@ -5,8 +5,8 @@ import { CreativeItems, ItemData } from "@serenityjs/protocol";
 import { ItemType } from "./type";
 import { CreativeItem } from "./creative";
 
-import type { CompoundTag } from "@serenityjs/nbt";
 import type { ItemIdentifier } from "./enums";
+import type { CompoundTag } from "@serenityjs/nbt";
 
 // Create a new stream from the item data.
 const dataStream = new BinaryStream(ITEMDATA);
@@ -24,7 +24,8 @@ for (const item of data) {
 		item.name as ItemIdentifier,
 		item.networkId,
 		meta?.stackable,
-		meta?.maxAmount
+		meta?.maxAmount,
+		meta?.tags
 	);
 
 	// Add the item type to the map.

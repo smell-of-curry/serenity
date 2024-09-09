@@ -3,13 +3,13 @@ import {
 	ActorDataType,
 	DataItem,
 	Gamemode,
-	ItemUseOnEntityInventoryTransactionType,
 	NpcDialogueAction,
 	NpcDialoguePacket
 } from "@serenityjs/protocol";
 import { EntityIdentifier } from "@serenityjs/entity";
 
 import { DialogueScene } from "../../dialogue";
+import { EntityInteractType } from "../../enums";
 
 import { EntityComponent } from "./entity-component";
 
@@ -40,7 +40,7 @@ class EntityNpcComponent extends EntityComponent {
 			entity.metadata.add(npc);
 
 			// Sync the entity with the npc metadata
-			entity.syncData();
+			entity.updateActorData();
 		}
 
 		// Check if the entity has a nametag component
@@ -137,7 +137,7 @@ class EntityNpcComponent extends EntityComponent {
 		packet.action = NpcDialogueAction.Open;
 		packet.dialogue = fScene.dialogue;
 		packet.scene = fScene.name;
-		packet.name = this.entity.getNametag();
+		packet.name = this.entity.getNametag() ?? "NPC";
 		packet.json = JSON.stringify(buttons);
 
 		// Send the packet to the player
@@ -157,20 +157,16 @@ class EntityNpcComponent extends EntityComponent {
 		packet.action = NpcDialogueAction.Close;
 		packet.dialogue = String();
 		packet.scene = String();
-		packet.name = this.entity.getNametag();
+		packet.name = this.entity.getNametag() ?? "NPC";
 		packet.json = String();
 
 		// Send the packet to the player
 		player.session.send(packet);
 	}
 
-	public onInteract(
-		player: Player,
-		type: ItemUseOnEntityInventoryTransactionType
-	): void {
+	public onInteract(player: Player, type: EntityInteractType): void {
 		// Check if the player is interacting with the npc
-		if (type === ItemUseOnEntityInventoryTransactionType.Interact)
-			return this.show(player);
+		if (type === EntityInteractType.Interact) return this.show(player);
 
 		// Check if the entity is an npc, if not return
 		if (this.entity.type.identifier !== EntityIdentifier.Npc) return;

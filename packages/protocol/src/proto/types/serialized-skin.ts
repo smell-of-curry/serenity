@@ -6,6 +6,8 @@ import { SkinAnimation } from "./skin-animation";
 import { SkinPersonaPiece } from "./skin-persona-piece";
 import { SkinPersonaTintPiece } from "./skin-persona-tint-piece";
 
+import type { ClientData } from "../../types";
+
 /**
  * Represents a skin.
  */
@@ -13,102 +15,102 @@ class SerializedSkin extends DataType {
 	/**
 	 * The identifier of the skin.
 	 */
-	public readonly identifier: string;
+	public identifier: string;
 
 	/**
 	 * The playfab identifier of the skin.
 	 */
-	public readonly playFabIdentifier: string;
+	public playFabIdentifier: string;
 
 	/**
 	 * The resource patch of the skin.
 	 */
-	public readonly resourcePatch: string;
+	public resourcePatch: string;
 
 	/**
 	 * The skin image.
 	 */
-	public readonly skinImage: SkinImage;
+	public skinImage: SkinImage;
 
 	/**
 	 * The animations of the skin.
 	 */
-	public readonly animations: Array<SkinAnimation>;
+	public animations: Array<SkinAnimation>;
 
 	/**
 	 * The cape image.
 	 */
-	public readonly capeImage: SkinImage;
+	public capeImage: SkinImage;
 
 	/**
 	 * The geometry data of the skin.
 	 */
-	public readonly geometryData: string;
+	public geometryData: string;
 
 	/**
 	 * The geometry version of the skin.
 	 */
-	public readonly geometryVersion: string;
+	public geometryVersion: string;
 
 	/**
 	 * The animation data of the skin.
 	 */
-	public readonly animationData: string;
+	public animationData: string;
 
 	/**
 	 * The animation engine of the skin.
 	 */
-	public readonly capeIdentifier: string;
+	public capeIdentifier: string;
 
 	/**
 	 * The full identifier of the skin.
 	 */
-	public readonly fullIdentifier: string;
+	public fullIdentifier: string;
 
 	/**
 	 * The arm size of the skin.
 	 */
-	public readonly armSize: string;
+	public armSize: string;
 
 	/**
 	 * The skin color of the skin.
 	 */
-	public readonly skinColor: string;
+	public skinColor: string;
 
 	/**
 	 * The persona pieces of the skin.
 	 */
-	public readonly personaPieces: Array<SkinPersonaPiece>;
+	public personaPieces: Array<SkinPersonaPiece>;
 
 	/**
 	 * The tint pieces of the skin.
 	 */
-	public readonly tintPieces: Array<SkinPersonaTintPiece>;
+	public tintPieces: Array<SkinPersonaTintPiece>;
 
 	/**
 	 * If the skin is premium.
 	 */
-	public readonly isPremium: boolean;
+	public isPremium: boolean;
 
 	/**
 	 * If the skin is persona.
 	 */
-	public readonly isPersona: boolean;
+	public isPersona: boolean;
 
 	/**
 	 * If there is a persona cape on classic skin.
 	 */
-	public readonly isPersonaCapeOnClassic: boolean;
+	public isPersonaCapeOnClassic: boolean;
 
 	/**
 	 * If the skin is used by its primary user.
 	 */
-	public readonly isPrimaryUser: boolean;
+	public isPrimaryUser: boolean;
 
 	/**
 	 * If the skin will override the player appearance.
 	 */
-	public readonly overridingPlayerAppearance: boolean;
+	public overridingPlayerAppearance: boolean;
 
 	/**
 	 * Creates a new serialized skin.
@@ -266,9 +268,9 @@ class SerializedSkin extends DataType {
 		stream.writeVarString(skin.playFabIdentifier);
 		stream.writeVarString(skin.resourcePatch);
 		SkinImage.write(stream, skin.skinImage);
-		stream.writeUint32(skin.animations.length, Endianness.Little);
 
 		// Write the animations of the skin.
+		stream.writeUint32(skin.animations.length, Endianness.Little);
 		for (const animation of skin.animations) {
 			SkinAnimation.write(stream, animation);
 		}
@@ -281,16 +283,15 @@ class SerializedSkin extends DataType {
 		stream.writeVarString(skin.fullIdentifier);
 		stream.writeVarString(skin.armSize);
 		stream.writeVarString(skin.skinColor);
-		stream.writeUint32(skin.personaPieces.length, Endianness.Little);
 
 		// Write the persona pieces of the skin.
+		stream.writeUint32(skin.personaPieces.length, Endianness.Little);
 		for (const personaPiece of skin.personaPieces) {
 			SkinPersonaPiece.write(stream, personaPiece);
 		}
 
-		stream.writeUint32(skin.tintPieces.length, Endianness.Little);
-
 		// Write the tint pieces of the skin.
+		stream.writeUint32(skin.tintPieces.length, Endianness.Little);
 		for (const tintPiece of skin.tintPieces) {
 			SkinPersonaTintPiece.write(stream, tintPiece);
 		}
@@ -300,6 +301,74 @@ class SerializedSkin extends DataType {
 		stream.writeBool(skin.isPersonaCapeOnClassic);
 		stream.writeBool(skin.isPrimaryUser);
 		stream.writeBool(skin.overridingPlayerAppearance);
+	}
+
+	/**
+	 * Converts the client data to a serialized skin.
+	 * @param data The client data to convert.
+	 * @returns The serialized skin.
+	 */
+	public static from(data: ClientData): SerializedSkin {
+		return {
+			identifier: data.SkinId,
+			playFabIdentifier: data.PlayFabId,
+			resourcePatch: Buffer.from(data.SkinResourcePatch, "base64").toString(
+				"utf8"
+			),
+			skinImage: new SkinImage(
+				data.SkinImageWidth,
+				data.SkinImageHeight,
+				Buffer.from(data.SkinData, "base64")
+			),
+			animations: data.AnimatedImageData.map(
+				(animation) =>
+					new SkinAnimation(
+						new SkinImage(
+							animation.ImageWidth,
+							animation.ImageHeight,
+							Buffer.from(animation.Image, "base64")
+						),
+						animation.Frames,
+						animation.AnimationExpression,
+						animation.Type
+					)
+			),
+			capeImage: new SkinImage(
+				data.CapeImageWidth,
+				data.CapeImageHeight,
+				Buffer.from(data.CapeData, "base64")
+			),
+			geometryData: Buffer.from(data.SkinGeometryData, "base64").toString(
+				"utf8"
+			),
+			geometryVersion: Buffer.from(
+				data.SkinGeometryDataEngineVersion,
+				"base64"
+			).toString("utf8"),
+			animationData: data.SkinAnimationData,
+			capeIdentifier: data.CapeId,
+			fullIdentifier: data.SkinId + data.CapeId,
+			armSize: data.ArmSize,
+			skinColor: data.SkinColor,
+			personaPieces: data.PersonaPieces.map(
+				(piece) =>
+					new SkinPersonaPiece(
+						piece.PieceId,
+						piece.PieceType,
+						piece.PackId,
+						piece.IsDefault,
+						piece.ProductId
+					)
+			),
+			tintPieces: data.PieceTintColors.map(
+				(tint) => new SkinPersonaTintPiece(tint.PieceType, tint.Colors)
+			),
+			isPremium: data.PremiumSkin,
+			isPersona: data.PersonaSkin,
+			isPersonaCapeOnClassic: data.CapeOnClassicSkin,
+			isPrimaryUser: data.TrustedSkin,
+			overridingPlayerAppearance: data.OverrideSkin
+		};
 	}
 }
 

@@ -1,5 +1,7 @@
 import {
+	AbilityIndex,
 	ActionIds,
+	ActorFlag,
 	DisconnectReason,
 	Gamemode,
 	LevelEvent,
@@ -10,8 +12,15 @@ import {
 	UpdateBlockPacket,
 	Vector3f
 } from "@serenityjs/protocol";
-import { ItemStack, ItemUseCause, type Player } from "@serenityjs/world";
-import { ItemType } from "@serenityjs/item";
+import {
+	ItemStack,
+	ItemUseCause,
+	PlayerJumpSignal,
+	PlayerStartSwimmingSignal,
+	PlayerStopSwimmingSignal,
+	type Player
+} from "@serenityjs/world";
+import { type ItemIdentifier, ItemType } from "@serenityjs/item";
 
 import { SerenityHandler } from "./serenity-handler";
 
@@ -52,23 +61,33 @@ class PlayerAction extends SerenityHandler {
 				break;
 			}
 
+			case ActionIds.Jump: {
+				// Create a new PlayerJumpSignal and emit it.
+				const signal = new PlayerJumpSignal(player);
+				return void signal.emit();
+			}
+
 			case ActionIds.StartSprint: {
 				player.isSprinting = true;
+				player.setActorFlag(ActorFlag.Sprinting, true);
 				break;
 			}
 
 			case ActionIds.StopSprint: {
 				player.isSprinting = false;
+				player.setActorFlag(ActorFlag.Sprinting, false);
 				break;
 			}
 
 			case ActionIds.StartSneak: {
 				player.isSneaking = true;
+				player.setActorFlag(ActorFlag.Sneaking, true);
 				break;
 			}
 
 			case ActionIds.StopSneak: {
 				player.isSneaking = false;
+				player.setActorFlag(ActorFlag.Sneaking, false);
 				break;
 			}
 
@@ -78,6 +97,37 @@ class PlayerAction extends SerenityHandler {
 				break;
 				// this.handleCreativePlayerDestroyBlock(packet, player);
 				// break;
+			}
+
+			case ActionIds.Swimming: {
+				// Check if this is the first time the player is swimming.
+				if (!player.isSwimming) {
+					// Create a new PlayerStartSwimmingSignal and emit it.
+					const signal = new PlayerStartSwimmingSignal(player);
+					const value = signal.emit();
+
+					// If the signal was cancelled, we will return.
+					if (!value) return player.setActorFlag(ActorFlag.Swimming, false);
+
+					// Set the player's swimming property to true.
+					player.isSwimming = true;
+					player.setActorFlag(ActorFlag.Swimming, true);
+				}
+				break;
+			}
+
+			case ActionIds.StopSwimming: {
+				// Create a new PlayerStopSwimmingSignal and emit it.
+				const signal = new PlayerStopSwimmingSignal(player);
+				const value = signal.emit();
+
+				// If the signal was cancelled, we will return.
+				if (!value) return player.setActorFlag(ActorFlag.Swimming, true);
+
+				// Set the player's swimming property to false.
+				player.isSwimming = false;
+				player.setActorFlag(ActorFlag.Swimming, false);
+				break;
 			}
 
 			case ActionIds.PredictBreak: {
@@ -102,16 +152,13 @@ class PlayerAction extends SerenityHandler {
 
 			case ActionIds.StartFlying: {
 				// Get the players mayfly component
-				const mayfly = player.getComponent("minecraft:ability.may_fly");
-
-				// Get the player's flying ability
-				const flying = player.getComponent("minecraft:ability.flying");
+				const mayfly = player.getAbility(AbilityIndex.MayFly);
 
 				// This stops horion flying exploit
 				// Check if the player has the mayfly ability
-				if (!mayfly.getCurrentValue()) {
+				if (!mayfly) {
 					// Set the player's flying ability to false
-					flying.setCurrentValue(false);
+					player.setAbility(AbilityIndex.Flying, false);
 
 					// Log a warning
 					this.serenity.logger.warn(
@@ -122,17 +169,20 @@ class PlayerAction extends SerenityHandler {
 
 				// Set the player's flying ability to true
 				player.isFlying = true;
-				flying.setCurrentValue(true);
+				player.setAbility(AbilityIndex.Flying, true);
 				break;
 			}
 
 			case ActionIds.StopFlying: {
-				// Get the player's flying ability
-				const flying = player.getComponent("minecraft:ability.flying");
-
 				// Set the player's flying ability to false
 				player.isFlying = false;
-				flying.setCurrentValue(false);
+				player.setAbility(AbilityIndex.Flying, false);
+				break;
+			}
+
+			case ActionIds.MissedSwing: {
+				player.executeMissSwing();
+				break;
 			}
 		}
 	}
@@ -148,7 +198,7 @@ class PlayerAction extends SerenityHandler {
 		const { x, y, z } = packet.blockPosition;
 
 		// Set the mining position to the player.
-		player.target = { x, y, z };
+		player.target = packet.blockPosition;
 
 		// Calculate the break time.
 		const breakTime = Math.ceil(2 * 20);
@@ -163,7 +213,7 @@ class PlayerAction extends SerenityHandler {
 		player.dimension.broadcast(event);
 
 		// Trigger the onStartBreak method of the block components.
-		const block = player.dimension.getBlock(x, y, z);
+		const block = player.dimension.getBlock(packet.blockPosition);
 		for (const component of block.components.values()) {
 			// Trigger the onStartBreak method of the block component.
 			component.onStartBreak?.(player);
@@ -192,7 +242,7 @@ class PlayerAction extends SerenityHandler {
 		const { x, y, z } =
 			packet.blockPosition === player.target
 				? packet.blockPosition
-				: player.target ?? { x: 0, y: 0, z: 0 };
+				: (player.target ?? { x: 0, y: 0, z: 0 });
 
 		// Create a new LevelEvent packet.
 		const event = new LevelEventPacket();
@@ -204,7 +254,7 @@ class PlayerAction extends SerenityHandler {
 		player.dimension.broadcast(event);
 
 		// Trigger the onStopBreak method of the block components.
-		const block = player.dimension.getBlock(x, y, z);
+		const block = player.dimension.getBlock({ x, y, z });
 		for (const component of block.components.values()) {
 			// Trigger the onStopBreak method of the block component.
 			component.onStopBreak?.(player);
@@ -232,7 +282,7 @@ class PlayerAction extends SerenityHandler {
 		const { x, y, z } = packet.blockPosition;
 
 		// Get the block from the dimension.
-		const block = player.dimension.getBlock(x, y, z);
+		const block = player.dimension.getBlock(packet.blockPosition);
 
 		// Verify if the player is in creative mode.
 		// If not, we will return.
@@ -240,7 +290,7 @@ class PlayerAction extends SerenityHandler {
 			// Create a new UpdateBlock packet.
 			const update = new UpdateBlockPacket();
 			update.networkBlockId = block.permutation.network;
-			update.position = { x, y, z };
+			update.position = packet.blockPosition;
 			update.flags = UpdateBlockFlagsType.Network;
 			update.layer = UpdateBlockLayerType.Normal;
 
@@ -271,14 +321,12 @@ class PlayerAction extends SerenityHandler {
 		const { x, y, z } = packet.blockPosition;
 
 		// Get the block from the dimension.
-		const block = player.dimension.getBlock(x, y, z);
+		const block = player.dimension.getBlock(packet.blockPosition);
 
 		// If the player is in adventure mode, we will set the block permutation.
 		// The player should not be able to break the block.
 		// And also check if the player has the ability to break the block.
-		const canMine = player
-			.getComponent("minecraft:ability.mine")
-			.getCurrentValue();
+		const canMine = player.getAbility(AbilityIndex.Mine);
 		if (player.gamemode === Gamemode.Adventure || !canMine) {
 			// Set the block permutation.
 			block.setPermutation(block.permutation);
@@ -301,7 +349,10 @@ class PlayerAction extends SerenityHandler {
 		const permutation = block.permutation;
 
 		// Destroy the block.
-		block.destroy(player);
+		const destroyed = block.destroy(player);
+
+		// If the block was not destroyed, we will return.
+		if (!destroyed) return;
 
 		// Check if the player is in creative mode.
 		// If so, we will return.
@@ -310,21 +361,27 @@ class PlayerAction extends SerenityHandler {
 		// Exhaust the player
 		player.exhaust(0.005);
 
-		// Create a new ItemStack.
-		const itemType = ItemType.resolve(permutation.type) as ItemType;
-		const itemStack = ItemStack.create(itemType, 1, permutation.index);
-		const itemEntity = player.dimension.spawnItem(
-			itemStack,
-			new Vector3f(x + 0.5, y + 0.5, z + 0.5)
-		);
+		// Iterate over the block drops.
+		for (const drop of permutation.type.drops) {
+			// Roll the drop amount.
+			const amount = drop.roll();
 
-		// Add random x & z velocity to the item entity.
-		const velocity = new Vector3f(
-			Math.random() * 0.1 - 0.05,
-			itemEntity.velocity.y,
-			Math.random() * 0.1 - 0.05
-		);
-		itemEntity.addMotion(velocity);
+			// Create a new ItemStack.
+			const itemType = ItemType.get(drop.type as ItemIdentifier) as ItemType;
+			const itemStack = ItemStack.create(itemType, amount);
+			const itemEntity = player.dimension.spawnItem(
+				itemStack,
+				new Vector3f(x + 0.5, y + 0.5, z + 0.5)
+			);
+
+			// Add random x & z velocity to the item entity.
+			const velocity = new Vector3f(
+				Math.random() * 0.1 - 0.05,
+				itemEntity.velocity.y,
+				Math.random() * 0.1 - 0.05
+			);
+			itemEntity.addMotion(velocity);
+		}
 
 		// Trigger the onUse method of the item components.
 		const usingItem = player.usingItem;

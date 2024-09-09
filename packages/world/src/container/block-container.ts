@@ -1,10 +1,10 @@
 import {
+	type ContainerId,
 	ContainerOpenPacket,
+	ContainerType,
 	InventoryContentPacket,
 	InventorySlotPacket,
-	NetworkItemStackDescriptor,
-	type ContainerId,
-	type ContainerType
+	NetworkItemStackDescriptor
 } from "@serenityjs/protocol";
 
 import { ItemStack } from "../item";
@@ -28,6 +28,11 @@ class BlockContainer extends Container {
 	 * The players that are currently in the container.
 	 */
 	public readonly occupants = new Set<Player>();
+
+	/**
+	 * The opened state of the container.
+	 */
+	public opened = false;
 
 	/**
 	 * Creates a new block container.
@@ -75,17 +80,8 @@ class BlockContainer extends Container {
 		// Check if the container has an occupant.
 		if (this.occupants.size === 0) return;
 
-		// Create a new InventorySlotPacket.
-		const packet = new InventorySlotPacket();
-
-		// Set properties of the packet.
-		packet.containerId = this.identifier;
-		packet.slot = slot;
-		packet.item = ItemStack.toNetworkStack(item);
-
-		// Send the packet to the occupants.
-		// TODO: Figure out why the items aren't updating for other players in the container.
-		for (const player of this.occupants) player.session.send(packet);
+		// Sync the items to the occupants.
+		for (const player of this.occupants) this.sync(player);
 	}
 
 	/**
@@ -96,9 +92,14 @@ class BlockContainer extends Container {
 		// Find a slot that has the same item type and isn't full (x64)
 		// If there is no slot, find the next empty slot.
 		const slot = this.storage.findIndex((slot) => {
-			if (slot === null) return false;
+			// Check if the slot is null.
+			if (!slot) return false;
 
-			return slot.type === item.type && slot.amount < item.maxAmount;
+			// Check if the item can be stacked.
+			if (slot.amount >= item.maxAmount) return false;
+
+			// Check if the item is equal to the slot.
+			return item.equals(slot);
 		});
 
 		// Check if the item is maxed.
@@ -212,15 +213,15 @@ class BlockContainer extends Container {
 	 * Swaps items in the container.
 	 * @param slot The slot to swap the item from.
 	 * @param otherSlot The slot to swap the item to.
-	 * @param otherCatainer The other container to swap the item with.
+	 * @param otherContainer The other container to swap the item with.
 	 */
 	public swapItems(
 		slot: number,
 		otherSlot: number,
-		otherCatainer?: Container
+		otherContainer?: Container
 	): void {
 		// Assign the target container
-		const targetContainer = otherCatainer ?? this;
+		const targetContainer = otherContainer ?? this;
 
 		// Get the items in the slots
 		const item = this.getItem(slot);
@@ -253,11 +254,47 @@ class BlockContainer extends Container {
 
 		// Set properties of the packet.
 		packet.containerId = this.identifier;
+		packet.dynamicContainerId = 0; // TODO: Implement dynamic containers.
 		packet.slot = slot;
 		packet.item = new NetworkItemStackDescriptor(0);
 
 		// Send the packet to the occupants.
 		for (const player of this.occupants) player.session.send(packet);
+	}
+
+	/**
+	 * Clears all slots in the container.
+	 */
+	public clear(): void {
+		for (let slot = 0; slot < this.storage.length; slot++) {
+			this.clearSlot(slot);
+		}
+	}
+
+	/**
+	 * Syncs the container contents to a player.
+	 * @param player The player to sync the container to.
+	 */
+	public sync(player: Player): void {
+		// Create a new InventoryContentPacket.
+		const packet = new InventoryContentPacket();
+
+		// Set the properties of the packet.
+		packet.containerId = this.identifier;
+		packet.dynamicContainerId = 0; // TODO: Implement dynamic containers.
+
+		// Map the items in the storage to network item stack descriptors.
+		packet.items = this.storage.map((item) => {
+			// If the item is null, return a new NetworkItemStackDescriptor.
+			// This will indicate that the slot is empty.
+			if (!item) return new NetworkItemStackDescriptor(0);
+
+			// Convert the item stack to a network item stack descriptor
+			return ItemStack.toNetworkStack(item);
+		});
+
+		// Send the packet to the player.
+		return player.session.send(packet);
 	}
 
 	/**
@@ -270,23 +307,17 @@ class BlockContainer extends Container {
 		open.identifier = this.identifier;
 		open.type = this.type;
 		open.position = this.block.position;
-		open.uniqueId = -1n; // This is needed for the client to open a block container.
-
-		// Create a new InventoryContentPacket.
-		const content = new InventoryContentPacket();
-		content.containerId = this.identifier;
-		content.items = this.storage.map((item) => {
-			if (item === null) return new NetworkItemStackDescriptor(0);
-
-			return ItemStack.toNetworkStack(item);
-		});
+		open.uniqueId = this.type === ContainerType.Container ? -1n : player.unique;
 
 		// Add the player to the occupants and set the opened container.
 		this.occupants.add(player);
 		player.openedContainer = this;
 
 		// Send the packets to the player.
-		player.session.send(open, content);
+		player.session.send(open);
+
+		// Sync the container to the player.
+		return this.sync(player);
 	}
 }
 

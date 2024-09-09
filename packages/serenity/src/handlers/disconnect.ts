@@ -1,4 +1,5 @@
 import { DisconnectPacket } from "@serenityjs/protocol";
+import { PlayerLeaveSignal } from "@serenityjs/world";
 
 import { SerenityHandler } from "./serenity-handler";
 
@@ -16,6 +17,17 @@ class Disconnect extends SerenityHandler {
 		const player = this.serenity.getPlayer(session);
 		if (!player) return;
 
+		// Save the player data
+		player.dimension.world.provider.writePlayer(player);
+
+		// Create a new player leave signal
+		// This event cannot be cancelled.
+		new PlayerLeaveSignal(
+			player,
+			packet.reason,
+			packet.message.message ?? String()
+		).emit();
+
 		// Despawn the player
 		player.despawn();
 
@@ -23,7 +35,7 @@ class Disconnect extends SerenityHandler {
 		this.serenity.players.delete(player.xuid);
 
 		// Send the player left message
-		player.dimension.sendMessage(`§e${player.username} left the game.§r`);
+		player.dimension.world.sendMessage(`§e${player.username} left the game.§r`);
 
 		// Log the player left message
 		player.dimension.world.logger.info(

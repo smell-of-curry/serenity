@@ -1,4 +1,4 @@
-import { BlockActorDataPacket, Color } from "@serenityjs/protocol";
+import { BlockActorDataPacket } from "@serenityjs/protocol";
 
 import { SerenityHandler } from "./serenity-handler";
 
@@ -19,12 +19,16 @@ export class BlockActorData extends SerenityHandler {
 		const {
 			value: { x, y, z }
 		} = packet.nbt as CompoundTag<{
-			x: IntTag<number>;
-			y: IntTag<number>;
-			z: IntTag<number>;
+			x: IntTag;
+			y: IntTag;
+			z: IntTag;
 		}>;
 
-		const blockActor = player.dimension.getBlock(x.value, y.value, z.value);
+		const blockActor = player.dimension.getBlock({
+			x: x.value,
+			y: y.value,
+			z: z.value
+		});
 
 		if (blockActor.hasComponent("minecraft:sign")) {
 			const signComponent = blockActor.getComponent("minecraft:sign");

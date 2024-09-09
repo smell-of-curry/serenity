@@ -2,6 +2,8 @@ import { type ItemIdentifier, type Items, ItemType } from "@serenityjs/item";
 
 import { Component } from "../component";
 
+import type { CompoundTag } from "@serenityjs/nbt";
+import type { BlockCoordinates, ItemUseMethod } from "@serenityjs/protocol";
 import type { ItemUseCause } from "../../enums";
 import type { Player } from "../../player";
 import type { ItemStack } from "../../item";
@@ -86,6 +88,15 @@ class ItemComponent<T extends keyof Items> extends Component {
 	}
 
 	/**
+	 * Checks if the item component equals another item component.
+	 * @param component The item component to compare.
+	 * @returns True if the item component equals the other item component, false otherwise.
+	 */
+	public equals(component: ItemComponent<T>): boolean {
+		return this.identifier === component.identifier;
+	}
+
+	/**
 	 * Called when the item has started to be used.
 	 * @param player The player that started to use the item.
 	 * @param cause The cause of the item use. (e.g. right-click, left-click)
@@ -103,9 +114,39 @@ class ItemComponent<T extends keyof Items> extends Component {
 	 * Called when the item has been used.
 	 * @param player The player that used the item.
 	 * @param cause The cause of the item use. (e.g. right-click, left-click)
+	 * @param blockPosition The block position the item was used on.
 	 * @returns If the item was successfully used, this will cause the event to be done using the item.
 	 */
-	public onUse?(player: Player, cause: ItemUseCause): boolean;
+	public onUse?(
+		player: Player,
+		cause: ItemUseCause,
+		blockPosition?: BlockCoordinates
+	): ItemUseMethod | undefined;
+
+	/**
+	 * Serializes the item component into the NBT.
+	 * @param nbt The NBT to serialize the component to.
+	 * @param component The component to serialize.
+	 */
+	public static serialize<T extends keyof Items>(
+		_nbt: CompoundTag,
+		_component: ItemComponent<T>
+	): void {
+		return;
+	}
+
+	/**
+	 * Deserializes the item component from the NBT.
+	 * @param nbt The NBT to deserialize the component from.
+	 * @param itemStack The item stack to deserialize the component to.
+	 * @returns A new item component.
+	 */
+	public static deserialize<T extends keyof Items>(
+		_nbt: CompoundTag,
+		_itemStack: ItemStack<T>
+	): ItemComponent<T> {
+		return new this(_itemStack, this.identifier);
+	}
 
 	public static bind(): void {
 		// Bind the component to the item types.

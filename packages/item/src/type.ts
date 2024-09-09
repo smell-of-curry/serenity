@@ -1,6 +1,9 @@
 import { type BlockIdentifier, BlockType } from "@serenityjs/block";
 
-import type { ItemData } from "@serenityjs/protocol";
+import type {
+	ItemData,
+	NetworkItemInstanceDescriptor
+} from "@serenityjs/protocol";
 import type { Items } from "./types";
 
 class ItemType<T extends keyof Items = keyof Items> {
@@ -30,6 +33,11 @@ class ItemType<T extends keyof Items = keyof Items> {
 	public readonly maxAmount: number;
 
 	/**
+	 * The tags of the item type.
+	 */
+	public readonly tags: Array<string>;
+
+	/**
 	 * The block of the item type, if acclicable.
 	 */
 	public readonly block: Items[T];
@@ -40,6 +48,7 @@ class ItemType<T extends keyof Items = keyof Items> {
 	 * @param network The network of the item type.
 	 * @param stackable Whether the item type is stackable.
 	 * @param maxAmount The maximum stack size of the item type.
+	 * @param tags The tags of the item type.
 	 * @param block The block of the item type.
 	 */
 	public constructor(
@@ -47,12 +56,14 @@ class ItemType<T extends keyof Items = keyof Items> {
 		network: number,
 		stackable?: boolean,
 		maxAmount?: number,
+		tags?: Array<string>,
 		block?: Items[T]
 	) {
 		this.identifier = identifier;
 		this.network = network;
 		this.stackable = stackable ?? true;
 		this.maxAmount = maxAmount ?? 64;
+		this.tags = tags ?? [];
 		this.block =
 			block ??
 			(BlockType.get(identifier as unknown as BlockIdentifier) as Items[T]);
@@ -102,6 +113,23 @@ class ItemType<T extends keyof Items = keyof Items> {
 			name: type.identifier,
 			networkId: type.network,
 			componentBased: false
+		};
+	}
+
+	public static toNetworkInstance(
+		type: ItemType,
+		stackSize: number = 1
+	): NetworkItemInstanceDescriptor {
+		return {
+			network: type.network,
+			metadata: 0,
+			networkBlockId: type.block?.getPermutation().network ?? 0,
+			stackSize,
+			extras: {
+				canDestroy: [],
+				canPlaceOn: [],
+				nbt: null
+			}
 		};
 	}
 }

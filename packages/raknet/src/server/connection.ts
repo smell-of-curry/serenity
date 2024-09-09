@@ -33,6 +33,11 @@ class Connection {
 	public status = Status.Connecting;
 
 	/**
+	 * The last update time of the connection
+	 */
+	public lastUpdate = Date.now();
+
+	/**
 	 * The network identifier of the connection
 	 */
 	public readonly rinfo: RemoteInfo;
@@ -106,6 +111,17 @@ class Connection {
 	 * Ticks the connection
 	 */
 	public tick(): void {
+		// Check if the client is stale
+		if (this.lastUpdate + 5000 < Date.now()) {
+			// Log a warning message for stale connections
+			this.server.logger.warn(
+				`Detected stale connection from §c${this.rinfo.address}§r:§c${this.rinfo.port}§r, disconnecting...`
+			);
+
+			// Disconnect the client
+			return this.disconnect();
+		}
+
 		// Check if the client is disconnecting or disconnected
 		if (
 			this.status === Status.Disconnecting ||
@@ -177,6 +193,9 @@ class Connection {
 	 * @param buffer The packet buffer
 	 */
 	public incoming(buffer: Buffer): void {
+		// Update the last update time
+		this.lastUpdate = Date.now();
+
 		// Reads the header of the packet (u8)
 		// And masks it with 0xf0 to get the header
 		const header = (buffer[0] as number) & 0xf0;
@@ -418,20 +437,14 @@ class Connection {
 
 		// Checks if there are any missings framesets,
 		// in the range of the last input sequence and the current sequence
-		const diff = frameset.sequence - this.lastInputSequence;
-		if (diff !== 1) {
-			// Check if we are missing more than one packet
+		// add the missing frame sequences to the lost queue
+		if (frameset.sequence - this.lastInputSequence > 1) {
 			for (
 				let index = this.lastInputSequence + 1;
 				index < frameset.sequence;
 				index++
-			) {
-				// Add the missing packet to the lost queue
-				// Nack will be sent on the next tick
-				if (!this.receivedFrameSequences.has(index)) {
-					this.lostFrameSequences.add(index);
-				}
-			}
+			)
+				this.lostFrameSequences.add(index);
 		}
 
 		// Set the last input sequence to the current sequence
@@ -588,7 +601,7 @@ class Connection {
 			frame.sequenceIndex = (this.outputSequenceIndex[
 				frame.orderChannel
 			] as number)++;
-		} else if (frame.isOrdered()) {
+		} else if (frame.isOrderExclusive()) {
 			// Set the order index and the sequence index
 			frame.orderIndex = (this.outputOrderIndex[
 				frame.orderChannel
@@ -600,6 +613,10 @@ class Connection {
 		const maxSize = this.mtu - 36;
 		const splitSize = Math.ceil(frame.payload.byteLength / maxSize);
 
+		// Increment the reliable index
+		frame.reliableIndex = this.outputReliableIndex++;
+
+		// Check if the frame is bigger than the MTU
 		if (frame.payload.byteLength > maxSize) {
 			// Create a new buffer from the payload and generate a fragment id
 			// const buffer = Buffer.from(frame.payload);
@@ -609,8 +626,9 @@ class Connection {
 			for (let index = 0; index < frame.payload.byteLength; index += maxSize) {
 				const nframe = new Frame();
 
-				if (frame.isReliable())
-					nframe.reliableIndex = this.outputReliableIndex++;
+				// Set the reliability and the reliable index
+				nframe.reliableIndex = frame.reliableIndex;
+				if (index !== 0) nframe.reliableIndex = this.outputReliableIndex++;
 
 				// Create a new frame and assign the values
 				nframe.sequenceIndex = frame.sequenceIndex;
@@ -626,8 +644,6 @@ class Connection {
 				this.queueFrame(nframe, priority);
 			}
 		} else {
-			if (frame.isReliable()) frame.reliableIndex = this.outputReliableIndex++;
-
 			return this.queueFrame(frame, priority);
 		}
 	}

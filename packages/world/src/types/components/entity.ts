@@ -16,7 +16,13 @@ import type {
 	EntityOnFireComponent,
 	EntityPhysicsComponent,
 	EntityScaleComponent,
-	EntityVariantComponent
+	EntityVariantComponent,
+	EntityHasCollisionComponent,
+	EntityAirSupplyComponent,
+	EntityDamageComponent,
+	EntityProjectileComponent,
+	EntityCollisionBoxComponent,
+	EntityLootComponent
 } from "../../components";
 
 /**
@@ -42,6 +48,8 @@ interface EntityMetadataComponents {
 	"minecraft:is_visible": EntityIsVisibleComponent;
 	"minecraft:on_fire": EntityOnFireComponent;
 	"minecraft:variant": EntityVariantComponent;
+	"minecraft:has_collision": EntityHasCollisionComponent;
+	"minecraft:air_supply": EntityAirSupplyComponent;
 }
 
 /**
@@ -54,6 +62,10 @@ interface EntityComponents
 	"minecraft:armor": EntityArmorComponent;
 	"minecraft:effects": EntityEffectsComponent;
 	"minecraft:npc": EntityNpcComponent;
+	"minecraft:damaging": EntityDamageComponent;
+	"minecraft:projectile": EntityProjectileComponent;
+	"minecraft:collision_box": EntityCollisionBoxComponent;
+	"minecraft:loot": EntityLootComponent;
 }
 
 export {

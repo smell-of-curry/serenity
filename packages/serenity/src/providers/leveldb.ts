@@ -1,28 +1,22 @@
-import { join, resolve } from "node:path";
-import { readFileSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 import {
+	Block,
 	Chunk,
 	type Dimension,
+	Entity,
+	Player,
 	SubChunk,
 	type TerrainGenerator,
 	World,
+	type WorldConfig,
 	WorldProvider
 } from "@serenityjs/world";
 import { Logger, LoggerColors } from "@serenityjs/logger";
 import { ChunkCoords, DimensionType } from "@serenityjs/protocol";
 import { Leveldb } from "@serenityjs/leveldb";
 import { BinaryStream, Endianness } from "@serenityjs/binarystream";
-
-import { exists } from "../utils/exists";
-
-interface LevelDBDimension {
-	identifier: string;
-	type: string;
-	generator: string;
-	viewDistance?: number;
-	simulationDistance?: number;
-}
+import { CompoundTag } from "@serenityjs/nbt";
 
 class LevelDBProvider extends WorldProvider {
 	/**
@@ -41,29 +35,21 @@ class LevelDBProvider extends WorldProvider {
 	public readonly db: Leveldb;
 
 	/**
-	 * The dimensions registered for the world.
-	 */
-	public readonly dimensions: Array<LevelDBDimension>;
-
-	/**
 	 * The chunks stored in the provider.
 	 */
-	public readonly chunks: Map<number, Map<bigint, Chunk>> = new Map();
+	public readonly chunks: Map<Dimension, Map<bigint, Chunk>> = new Map();
 
-	public constructor(path: string, dimensions: Array<LevelDBDimension>) {
+	public constructor(path: string) {
 		super();
 
 		// Open the LevelDB database.
 		this.db = Leveldb.open(resolve(path, "db"));
-		this.dimensions = dimensions;
 	}
 
 	public readChunk(cx: number, cz: number, dimension: Dimension): Chunk {
 		// Get the dimension index from the dimensions array.
 		// This will be used as the dimension key in the database.
-		const index = this.dimensions.findIndex(
-			(x) => x.identifier === dimension.identifier
-		);
+		const index = this.dimensionIndexOf(dimension);
 
 		// Check if the dimension index was found.
 		if (index === -1)
@@ -72,11 +58,11 @@ class LevelDBProvider extends WorldProvider {
 			);
 
 		// Check if the chunks map has the index.
-		if (!this.chunks.has(index))
-			this.chunks.set(index, new Map<bigint, Chunk>());
+		if (!this.chunks.has(dimension))
+			this.chunks.set(dimension, new Map<bigint, Chunk>());
 
 		// Get the chunks map for the dimension index.
-		const chunks = this.chunks.get(index);
+		const chunks = this.chunks.get(dimension);
 
 		// Check if no chunks were found.
 		if (!chunks)
@@ -153,10 +139,151 @@ class LevelDBProvider extends WorldProvider {
 		}
 	}
 
-	public writeChunk(chunk: Chunk, dimension: string): void {
+	public readAvailableActors(dimension: Dimension): Array<bigint> {
+		// Get the dimension index from the dimensions array.
+		const index = this.dimensionIndexOf(dimension);
+
+		// Check if the dimension index is invalid.
+		if (index === -1)
+			throw new Error(
+				`Dimension index "${dimension.identifier}" was not found for world.`
+			);
+
+		// Try to read the actor list from the database.
+		try {
+			// Create a key for the actor list.
+			const key = LevelDBProvider.buildActorListKey(index);
+
+			// Get the actor list from the database
+			// And create a new BinaryStream instance.
+			const stream = new BinaryStream(this.db.get(key));
+
+			// Prepare an array of unique identifiers.
+			// And read the unique identifiers from the stream.
+			const uniqueIds = new Array<bigint>();
+			do {
+				uniqueIds.push(stream.readInt64(Endianness.Little));
+			} while (!stream.cursorAtEnd());
+
+			// Return the unique identifiers array.
+			return uniqueIds;
+		} catch {
+			// Return an empty array if no unique identifiers were found.
+			return new Array<bigint>();
+		}
+	}
+
+	public writeAvailableActors(
+		dimension: Dimension,
+		uniqueIds: Array<bigint>
+	): void {
+		// Get the dimension index from the dimensions array.
+		const index = this.dimensionIndexOf(dimension);
+
+		// Check if the dimension index is invalid.
+		if (index === -1)
+			throw new Error(
+				`Dimension index "${dimension.identifier}" was not found for world.`
+			);
+
+		// Create a key for the actor list.
+		const key = LevelDBProvider.buildActorListKey(index);
+
+		// Create a new BinaryStream instance.
+		const stream = new BinaryStream();
+
+		// Iterate through the unique identifiers and write them to the database.
+		for (const uniqueId of uniqueIds) {
+			// Write the unique identifier to the stream.
+			stream.writeInt64(uniqueId, Endianness.Little);
+		}
+
+		// Write the actor list to the database.
+		this.db.put(key, stream.getBuffer());
+	}
+
+	public readEntity(
+		dimension: Dimension,
+		entity: bigint | Entity
+	): CompoundTag {
+		// Get the dimension index from the dimensions array.
+		const index = this.dimensionIndexOf(dimension);
+
+		// Check if the dimension index is invalid.
+		if (index === -1)
+			throw new Error(
+				`Dimension index "${dimension.identifier}" was not found for world.`
+			);
+
+		// Get the entity unique identifier.
+		const uniqueId = entity instanceof Entity ? entity.unique : entity;
+
+		// Create a key for the actor data.
+		const key = LevelDBProvider.buildActorDataKey(uniqueId);
+
+		// Attempt to get the actor data from the database.
+		try {
+			// Get the actor data from the database.
+			const data = this.db.get(key);
+
+			// Create a new BinaryStream instance.
+			const stream = new BinaryStream(data);
+			const nbt = CompoundTag.read(stream);
+
+			// Return the entity data.
+			return nbt;
+		} catch {
+			// Return an empty CompoundTag if the entity data was not found.
+			return new CompoundTag();
+		}
+	}
+
+	public writeEntity(entity: Entity): void {
+		// Create a key for the actor data.
+		const key = LevelDBProvider.buildActorDataKey(entity.unique);
+
+		// Create a new BinaryStream instance.
+		const stream = new BinaryStream();
+
+		// Serialize the entity data.
+		const nbt = Entity.serialize(entity);
+		CompoundTag.write(stream, nbt);
+
+		// Write the actor data to the database.
+		this.db.put(key, stream.getBuffer());
+	}
+
+	public deleteEntity(entity: Entity): void {
+		// Get the dimension index from the dimensions array.
+		const dimension = entity.dimension;
+		const index = this.dimensionIndexOf(dimension);
+
+		// Check if the dimension index is invalid.
+		if (index === -1)
+			throw new Error(
+				`Dimension index "${dimension.identifier}" was not found for world.`
+			);
+
+		// Create a key for the actor data.
+		const key = LevelDBProvider.buildActorDataKey(entity.unique);
+
+		// Delete the actor data from the database.
+		this.db.delete(key);
+
+		// Get the available actors from the dimension.
+		const uniqueIds = this.readAvailableActors(dimension);
+
+		// Filter the unique identifiers.
+		const filtered = uniqueIds.filter((x) => x !== entity.unique);
+
+		// Write the available actors to the dimension.
+		this.writeAvailableActors(dimension, filtered);
+	}
+
+	public writeChunk(chunk: Chunk, dimension: Dimension): void {
 		// Get the dimension index from the dimensions array.
 		// This will be used as the dimension key in the database.
-		const index = this.dimensions.findIndex((x) => x.identifier === dimension);
+		const index = this.dimensionIndexOf(dimension);
 
 		// Check if the dimension index was found.
 		if (index === -1)
@@ -208,20 +335,155 @@ class LevelDBProvider extends WorldProvider {
 		this.db.put(key, stream.getBuffer());
 	}
 
+	public readBlockData(dimension: Dimension): Array<CompoundTag> {
+		// Get the dimension index from the dimensions array.
+		const index = this.dimensionIndexOf(dimension);
+
+		// Check if the dimension index is invalid.
+		if (index === -1)
+			throw new Error(
+				`Dimension index "${dimension.identifier}" was not found for world.`
+			);
+
+		// Attempt to read the block data from the database.
+		try {
+			// Create a key for the block data.
+			const key = LevelDBProvider.buildBlockDataKey(index);
+
+			// Get the block data from the database.
+			const data = this.db.get(key);
+
+			// Create a new BinaryStream instance.
+			const stream = new BinaryStream(data);
+
+			// Prepare an array of block data.
+			const blockData = new Array<CompoundTag>();
+
+			// Read the block data from the stream.
+			do {
+				blockData.push(CompoundTag.read(stream));
+			} while (!stream.cursorAtEnd());
+
+			// Return the block data array.
+			return blockData;
+		} catch {
+			// Return an empty array if no block data was found.
+			return new Array<CompoundTag>();
+		}
+	}
+
+	public writeBlockData(dimension: Dimension, data: Array<CompoundTag>): void {
+		// Get the dimension index from the dimensions array.
+		const index = this.dimensionIndexOf(dimension);
+
+		// Check if the dimension index is invalid.
+		if (index === -1)
+			throw new Error(
+				`Dimension index "${dimension.identifier}" was not found for world.`
+			);
+
+		// Create a key for the block data.
+		const key = LevelDBProvider.buildBlockDataKey(index);
+
+		// Create a new BinaryStream instance.
+		const stream = new BinaryStream();
+
+		// Iterate through the block data and write them to the database.
+		for (const nbt of data) {
+			// Write the block data to the stream.
+			CompoundTag.write(stream, nbt);
+		}
+
+		// Write the block data to the database.
+		this.db.put(key, stream.getBuffer());
+	}
+
+	public hasPlayer(player: string | Player): boolean {
+		// Get the player UUID from the player instance.
+		const uuid = player instanceof Player ? player.uuid : player;
+		const key = `player_server_${uuid}`;
+
+		// Attempt to get the player from the database.
+		try {
+			// Check if the player exists in the database.
+			this.db.get(Buffer.from(key));
+
+			// Return true if the player exists.
+			return true;
+		} catch {
+			// Return false if the player does not exist.
+			return false;
+		}
+	}
+
+	public readPlayer(player: string | Player): CompoundTag {
+		// Get the player UUID from the player instance.
+		const uuid = player instanceof Player ? player.uuid : player;
+		const key = `player_server_${uuid}`;
+
+		// Attempt to get the player from the database.
+		const data = this.db.get(Buffer.from(key));
+
+		// Create a new BinaryStream instance.
+		const stream = new BinaryStream(data);
+		const nbt = CompoundTag.read(stream);
+
+		// Return the player data.
+		return nbt;
+	}
+
+	public writePlayer(player: Player): void {
+		// Get the player UUID from the player instance.
+		const uuid = player.uuid;
+		const key = `player_server_${uuid}`;
+
+		// Serialize the player data.
+		const nbt = Entity.serialize(player);
+		nbt.createStringTag("Username", player.username);
+
+		// Create a new BinaryStream instance.
+		const stream = new BinaryStream();
+		CompoundTag.write(stream, nbt);
+
+		// Write the player data to the database.
+		this.db.put(Buffer.from(key), stream.getBuffer());
+	}
+
 	public save(shutdown?: boolean): void {
 		// Iterate through the chunks and write them to the database.
-		for (const [index, chunks] of this.chunks) {
+		for (const [dimension, chunks] of this.chunks) {
 			// Iterate through the chunks and write them to the database
 			for (const [, chunk] of chunks) {
-				const dimension = this.dimensions[index];
-
-				// Check if the dimension was found
-				if (!dimension)
-					throw new Error(`Failed to get dimensions for index "${index}"`);
-
 				// Write the chunk to the database.
-				this.writeChunk(chunk, dimension.identifier);
+				this.writeChunk(chunk, dimension);
 			}
+
+			// Get the available actors from the dimension.
+			const entities = dimension.getEntities(false);
+			const uniqueIds = entities.map((x) => x.unique);
+
+			// Write the available actors to the dimension.
+			this.writeAvailableActors(dimension, uniqueIds);
+
+			// Iterate through the entities and write them to the database.
+			for (const entity of entities) {
+				// Write the entity to the database.
+				this.writeEntity(entity);
+			}
+
+			// Iterate through the players and write them to the database.
+			for (const player of dimension.getPlayers()) {
+				// Write the player to the database.
+				this.writePlayer(player);
+			}
+
+			// Get the block data from the dimension.
+			const blockData = [...dimension.blocks.values()].map((x) =>
+				Block.serialize(x)
+			);
+
+			// Write the block data to the database.
+			this.writeBlockData(dimension, blockData);
 		}
 
 		// If the provider is shutting down, close the database connection.
@@ -272,91 +534,134 @@ class LevelDBProvider extends WorldProvider {
 	}
 
 	public static initialize(
+		config: WorldConfig,
 		path: string,
 		generators: Array<typeof TerrainGenerator>
 	): World {
-		// Check if the levelname.txt file exists.
-		if (!exists(join(path, "levelname.txt"))) {
-			// Write the default level name to the levelname.txt file.
-			writeFileSync(join(path, "levelname.txt"), "default");
-		}
-
-		// Check if a .dimensions file exists.
-		// This is a SerenityJS specific file that stores will store the dimensions of the world.
-		if (!exists(join(path, ".dimensions"))) {
-			// The default dimension for a world.
-			const defaultDimension = {
-				identifier: "overworld",
-				type: "overworld",
-				generator: "superflat"
-			};
-
-			// Write the default dimensions to the .dimensions file.
-			writeFileSync(
-				join(path, ".dimensions"),
-				JSON.stringify([defaultDimension], null, 2)
-			);
-		}
-
 		// Read the level name from the levelname.txt file.
-		const identifier = readFileSync(join(path, "levelname.txt"), "utf8").trim();
-
-		// Read the dimensions from the .dimensions file.
-		const dimensions: Array<LevelDBDimension> = JSON.parse(
-			readFileSync(join(path, ".dimensions"), "utf8").trim()
-		);
+		const { identifier, dimensions } = config;
 
 		// Create a new provider instance.
-		const provider = new this(path, dimensions);
+		const provider = new this(path);
 
 		// Create a new world instance with the provider.
 		const world = new World(identifier, provider);
 
-		for (const dimension of dimensions) {
+		// Iterate through the dimensions and create them.
+		for (const entry of dimensions) {
+			// Seperate the dimension properties.
+			const { identifier, type, generator, viewDistance, simulationDistance } =
+				entry;
+
 			// Check if the dimension identifier is valid. (no spaces, no special characters)
-			if (!/^[\d_a-z]+$/.test(dimension.identifier)) {
+			if (!/^[\d_a-z]+$/.test(identifier)) {
 				throw new Error(
-					`Invalid dimension identifier: "${dimension.identifier}"\nDimension identifiers must only contain lowercase letters, numbers, and underscores.`
+					`Invalid dimension identifier: "${identifier}"\nDimension identifiers must only contain lowercase letters, numbers, and underscores.`
 				);
 			}
 
 			// Find the generator for the dimension.
-			const generator = generators.find(
-				(generator) => generator.identifier === dimension.generator
-			);
+			const dgenerator = generators.find((x) => x.identifier === generator);
 
 			// Check if the generator exists.
-			if (!generator)
+			if (!dgenerator)
 				throw new Error(
-					`Unknown generator "${dimension.generator}" for dimension "${dimension.identifier}" in world "${identifier}"\nMake sure the provided generator is valid and registered.`
+					`Unknown generator "${generator}" for dimension "${identifier}" in world "${identifier}"\nMake sure the provided generator is valid and registered.`
 				);
 
 			// Parse the dimension type.
-			const type =
-				dimension.type === "overworld"
+			const dim =
+				type === "overworld"
 					? DimensionType.Overworld
-					: dimension.type === "nether"
+					: type === "nether"
 						? DimensionType.Nether
 						: DimensionType.End;
 
-			// TODO: Get the seed from the level.dat file.
-			const instance = world.createDimension(
-				dimension.identifier,
-				type,
-				new generator(0)
-			);
+			// Create a new instance of the generator & dimension.
+			const instance = new dgenerator(config.seed);
+			const dimension = world.createDimension(identifier, dim, instance);
 
 			// Set the view distance for the dimension.
-			if (dimension.viewDistance)
-				instance.viewDistance = dimension.viewDistance;
+			if (viewDistance) dimension.viewDistance = viewDistance;
 
 			// Set the simulation distance for the dimension.
-			if (dimension.simulationDistance)
-				instance.simulationDistance = dimension.simulationDistance;
+			if (simulationDistance) dimension.simulationDistance = simulationDistance;
+
+			// Get the spawn coordinates for the dimension.
+			const [x, y, z] = entry.spawn;
+
+			// Set the spawn coordinates for the dimension.
+			dimension.spawn.x = x;
+			dimension.spawn.y = y;
+			dimension.spawn.z = z;
+
+			// Read the available actors for the dimension.
+			const uniqueIds = provider.readAvailableActors(dimension);
+
+			// Iterate through the unique identifiers and spawn the entities.
+			for (const uniqueId of uniqueIds) {
+				// Read the entity from the provider.
+				const entity = provider.readEntity(dimension, uniqueId);
+
+				// Deserialize the entity and add it to the dimension.
+				const instance = Entity.deserialize(entity, dimension);
+
+				// Spawn the entity in the dimension.
+				instance.spawn();
+			}
+
+			// Read the block data for the dimension.
+			const blockData = provider.readBlockData(dimension);
+
+			// Iterate through the block data and deserialize the blocks.
+			for (const nbt of blockData) {
+				// Deserialize the block from the nbt.
+				const block = Block.deserialize(dimension, nbt);
+
+				// Add the block to the dimension.
+				dimension.blocks.set(block.position, block);
+			}
 
 			// Debug log the dimension creation.
 			this.logger.debug(
-				`Created dimension "${dimension.identifier}" with generator "${dimension.generator}" in world "${identifier}"`
+				`Created dimension "${dimension.identifier}" with generator "${dimension.generator.identifier}" in world "${world.identifier}"`
+			);
+		}
+
+		// Pregenerate the spawn chunks for each dimension.
+		for (const dimension of world.dimensions.values()) {
+			// Get the spawn position of the dimension.
+			const sx = dimension.spawn.x >> 4;
+			const sz = dimension.spawn.z >> 4;
+
+			// Get the view distance of the dimension.
+			const viewDistance = dimension.viewDistance >> 4;
+
+			// Calculate the amount of chunks to pregenerate.
+			const amount = (viewDistance * 2 + 1) ** 2;
+
+			// Log the amount of chunks to pregenerate.
+			this.logger.info(
+				`Preparing §c${amount}§r chunks for world §a${world.identifier}§r in dimension §a${dimension.identifier}§r.`
+			);
+
+			// Iterate over the chunks to pregenerate.
+			for (let x = -viewDistance; x <= viewDistance; x++) {
+				for (let z = -viewDistance; z <= viewDistance; z++) {
+					// Read the chunk from the provider.
+					const chunk = provider.readChunk(sx + x, sz + z, dimension);
+
+					// Serialize the chunk, the will cache the chunk in the provider.
+					Chunk.serialize(chunk);
+
+					// Set the dirty flag to false.
+					chunk.dirty = false;
+				}
+			}
+
+			// Log the success message.
+			this.logger.success(
+				`Successfully pregenerated §c${amount}§r chunks for world §a${world.identifier}§r in dimension §a${dimension.identifier}§r.`
 			);
 		}
 
@@ -423,6 +728,48 @@ class LevelDBProvider extends WorldProvider {
 
 		// Write the subchunk index to the stream.
 		stream.writeByte(cy);
+
+		// Return the buffer from the stream.
+		return stream.getBuffer();
+	}
+
+	public static buildActorListKey(index: number) {
+		// Create a new BinaryStream instance.
+		const stream = new BinaryStream();
+
+		// Write the key symbol to the stream
+		stream.writeInt32(0x64_69_67_70);
+
+		// Check if the index is not 0.
+		if (index !== 0) stream.writeInt32(index, Endianness.Little);
+
+		// Return the buffer from the stream.
+		return stream.getBuffer();
+	}
+
+	public static buildActorDataKey(uniqueId: bigint): Buffer {
+		// Create a new BinaryStream instance.
+		const stream = new BinaryStream();
+
+		// Write the key symbol to the stream.
+		stream.writeBuffer(Buffer.from("actorprefix", "ascii"));
+
+		// Write the unique identifier to the stream.
+		stream.writeInt64(uniqueId, Endianness.Little);
+
+		// Return the buffer from the stream.
+		return stream.getBuffer();
+	}
+
+	public static buildBlockDataKey(index: number): Buffer {
+		// Create a new BinaryStream instance.
+		const stream = new BinaryStream();
+
+		// Write the key symbol to the stream.
+		stream.writeInt32(0x31);
+
+		// Check if the index is not 0.
+		if (index !== 0) stream.writeInt32(index, Endianness.Little);
 
 		// Return the buffer from the stream.
 		return stream.getBuffer();

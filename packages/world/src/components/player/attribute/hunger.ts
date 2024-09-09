@@ -1,10 +1,9 @@
 import {
 	ActorDamageCause,
-	ActorEventIds,
-	ActorEventPacket,
 	AttributeName,
 	Gamemode
 } from "@serenityjs/protocol";
+import { EntityIdentifier } from "@serenityjs/entity";
 
 import { EntityAttributeComponent } from "../../entity/attribute/attribute";
 
@@ -14,6 +13,8 @@ import type { Player } from "../../../player";
 
 class PlayerHungerComponent extends EntityAttributeComponent {
 	public static readonly identifier = AttributeName.PlayerHunger;
+
+	public static readonly types = [EntityIdentifier.Player];
 
 	public readonly effectiveMin: number = 0;
 	public readonly effectiveMax: number = 20;
@@ -45,7 +46,7 @@ class PlayerHungerComponent extends EntityAttributeComponent {
 		// difficulty modifier
 
 		// Exhaust player if its running (Temporary)
-		if (this.entity.isSprinting) this.exhaust(0.05);
+		// if (this.entity.isSprinting) this.exhaust(0.05);
 
 		// Reset tick timer after 4 seconds
 		if (this.tickTimer >= 80) this.tickTimer = 0;

@@ -8,9 +8,15 @@ import {
 	type ItemUseInventoryTransaction,
 	Gamemode,
 	type ItemUseOnEntityInventoryTransaction,
-	type ItemReleaseInventoryTransaction
+	type ItemReleaseInventoryTransaction,
+	AbilityIndex,
+	CompletedUsingItemPacket
 } from "@serenityjs/protocol";
-import { ItemUseCause, type Player } from "@serenityjs/world";
+import {
+	EntityInteractType,
+	ItemUseCause,
+	type Player
+} from "@serenityjs/world";
 import { BlockIdentifier, BlockPermutation } from "@serenityjs/block";
 
 import { SerenityHandler } from "./serenity-handler";
@@ -136,18 +142,20 @@ class InventoryTransaction extends SerenityHandler {
 		switch (transaction.type) {
 			case ItemUseInventoryTransactionType.Place: {
 				// Get the interacted block and check if it is air
-				const { x, y, z } = transaction.blockPosition;
-				const interactedBlock = player.dimension.getBlock(x, y, z);
+				const interactedBlock = player.dimension.getBlock(
+					transaction.blockPosition
+				);
 				if (interactedBlock.isAir()) break;
 
 				// Trigger the onInteract method of the block components
-				for (const component of interactedBlock.components.values()) {
-					// Trigger the onInteract method of the block component
-					component.onInteract?.(player);
-				}
+				const interacted = interactedBlock.interact(
+					player,
+					transaction.face,
+					transaction.clickPosition
+				);
 
 				// Check if the interaction opened a container, if so stop the block placement
-				if (player.openedContainer) break;
+				if (!interacted || player.openedContainer) break;
 
 				// Check if the player is using an item
 				const usingItem = player.usingItem;
@@ -158,8 +166,15 @@ class InventoryTransaction extends SerenityHandler {
 
 				// Trigger the onUse method of the item components
 				for (const component of usingItem.components.values()) {
-					component.onUse?.(player, ItemUseCause.Place);
+					component.onUse?.(
+						player,
+						ItemUseCause.Place,
+						transaction.blockPosition
+					);
 				}
+
+				// Check if the transaction is an initial transaction
+				if (!transaction.intialTransaction) return;
 
 				// Check if a block type is present within the item
 				const blockType = usingItem.type.block;
@@ -172,12 +187,15 @@ class InventoryTransaction extends SerenityHandler {
 
 				// Check if the player is in adventure mode, if so stop the block placement
 				// And check if the player is able to place blocks
-				const canBuild = player
-					.getComponent("minecraft:ability.build")
-					.getCurrentValue();
+				const canBuild = player.getAbility(AbilityIndex.Build);
 
 				// Check if the player is in adventure mode, if so stop the block placement
-				if (player.gamemode === Gamemode.Adventure || !canBuild) {
+				if (
+					player.gamemode === Gamemode.Adventure ||
+					!canBuild ||
+					player.dimension.bounds.max < resultingBlock.position.y ||
+					player.dimension.bounds.min > resultingBlock.position.y
+				) {
 					// Get the Air Permutation
 					const air = BlockPermutation.resolve(BlockIdentifier.Air);
 
@@ -195,10 +213,14 @@ class InventoryTransaction extends SerenityHandler {
 				const clickPosition = transaction.clickPosition;
 
 				// Set the block with the blockType permutation based off the items metadata
-				resultingBlock.setPermutation(blockPermutation, {
+				const placed = resultingBlock.setPermutation(blockPermutation, {
 					player,
+					blockFace: transaction.face,
 					clickPosition
 				});
+
+				// Check if the block was placed, if not break the switch statement
+				if (!placed) break;
 
 				// Check if the player is in survival mode, if so decrement the item
 				if (player.gamemode === Gamemode.Survival) usingItem.decrement();
@@ -217,6 +239,7 @@ class InventoryTransaction extends SerenityHandler {
 					player.usingItem = usingItem;
 
 					// Trigger the onStartUse method of the item components
+					player.startUsingTick = player.getWorld().currentTick;
 					for (const component of usingItem.components.values()) {
 						component.onStartUse?.(player, ItemUseCause.Use);
 					}
@@ -230,7 +253,13 @@ class InventoryTransaction extends SerenityHandler {
 					const used = component.onUse?.(player, ItemUseCause.Use);
 
 					// Check if the item was successfully used
-					if (used) player.usingItem = null;
+					if (used != undefined) {
+						const packet = new CompletedUsingItemPacket();
+
+						packet.itemId = player.usingItem?.type.network ?? 0;
+						packet.itemUseMethod = used;
+						player.usingItem = null;
+					}
 				}
 
 				break;
@@ -257,10 +286,14 @@ class InventoryTransaction extends SerenityHandler {
 		// Check if the entity is valid
 		if (!entity) return;
 
+		// Get the type of the transaction
+		const type =
+			transaction.type === 0
+				? EntityInteractType.Interact
+				: EntityInteractType.Attack;
+
 		// Trigger the onInteract method of the entity components
-		for (const component of entity.components.values()) {
-			component.onInteract?.(player, transaction.type);
-		}
+		entity.interact(player, type);
 	}
 
 	public static handleItemReleaseTransaction(

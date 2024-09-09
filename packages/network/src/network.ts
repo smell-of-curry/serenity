@@ -121,7 +121,6 @@ class Network extends Emitter<NetworkEvents> {
 			if (session) {
 				// Create a new disconnect packet.
 				const packet = new DisconnectPacket();
-				packet.message = "Player disconnected.";
 				packet.reason = DisconnectReason.Disconnected;
 				packet.hideDisconnectScreen = true;
 
@@ -427,6 +426,12 @@ class Network extends Emitter<NetworkEvents> {
 				`Failed to send packets to "${session.identifier.address}:${session.identifier.port}"!`,
 				packets.map((x) => Packet[x.getId()]),
 				reason
+			);
+
+			// Disconnect the session if an error occurs.
+			return session.disconnect(
+				`Internal SerenityJS Error: Server failed to send packets to the session.\n\n§c${reason}§r\nBatched packets: §c${packets.map((x) => Packet[x.getId()]).join("§r, §c")}§r`,
+				DisconnectReason.BadPacket
 			);
 		}
 	}

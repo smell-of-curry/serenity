@@ -1,18 +1,27 @@
 import { execSync } from "node:child_process";
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { relative, resolve } from "node:path";
 import process from "node:process";
 
 import { Logger, LoggerColors } from "@serenityjs/logger";
 import Emitter from "@serenityjs/emitter";
 
-import { PLUGIN_TEMPLATE, TSCONFIG_TEMPLATE } from "./templates";
 import { exists } from "./utils/exists";
+import { unzip } from "./utils";
 
 export interface Plugin {
 	logger: Logger;
-	config: PluginConfig;
+	reloadable?: boolean;
+	package: PluginPackage;
+	path: string;
 	module: PluginModule;
+}
+
+interface PluginPackage {
+	name: string;
+	version: string;
+	main: string;
+	reloadable: boolean;
 }
 
 interface PluginEvents {
@@ -26,21 +35,11 @@ interface PluginModule {
 	onShutdown?(...arguments_: Array<unknown>): void;
 }
 
-interface PluginConfig {
-	name: string;
-	version: string;
-	mode: "development" | "production";
-	color: string;
-	entry: string;
-	node?: boolean;
-	typescript?: boolean;
-}
-
 class Plugins extends Emitter<PluginEvents> {
 	/**
 	 * The logger instance.
 	 */
-	public readonly logger = new Logger("Plugins", LoggerColors.CyanBright);
+	public readonly logger = new Logger("Plugins", LoggerColors.Blue);
 
 	/**
 	 * The path to the plugins folder.
@@ -88,177 +87,146 @@ class Plugins extends Emitter<PluginEvents> {
 			}
 		}
 
+		// Check if there are any bundled plugins ".sjs" in the plugins directory
+		const bundled = readdirSync(this.path).filter((file) =>
+			file.endsWith(".sjs")
+		);
+
+		// Iterate over all bundled plugins
+		for (const file of bundled) {
+			// Unzip the bundled plugin
+			unzip(resolve(this.path, file), this.path);
+
+			// Remove the ".sjs" file
+			rmSync(resolve(this.path, file));
+		}
+
 		// Read all directories with in the plugins directory
 		const directories = readdirSync(this.path, {
 			withFileTypes: true
 		}).filter((dirent) => dirent.isDirectory());
 
-		// Iterate over all directories, anc check if they are a plugin
+		// Iterate over all directories, check if they can be loaded as a plugin
 		for (const directory of directories) {
-			// Resolve the path to the directory
+			// Get the path to the directory
 			const path = resolve(this.path, directory.name);
 
-			// Check if the plugin.json file exists
-			if (!exists(resolve(path, "plugin.json"))) {
-				// Create the plugin.json file
-				try {
-					// Generate the plugin.json file from the template
-					const config = PLUGIN_TEMPLATE.replace("plugin-name", directory.name);
+			// Check if a package.json file exists
+			// If it doesn't, then we will assume it is not a plugin
+			// So will skip this directory
+			if (!exists(resolve(path, "package.json"))) {
+				// Log a debub message that the package.json file was not found
+				this.logger.debug(
+					`Skipping directory "${relative(process.cwd(), path)}", as a package.json was not found.`
+				);
 
-					// Write the plugin.json file to the directory
-					writeFileSync(resolve(path, "plugin.json"), config);
-				} catch {
+				// Skip this directory
+				continue;
+			}
+
+			// Log a debug message that we are attempting to load the plugin
+			this.logger.debug(
+				`Attempting to load plugin "${relative(process.cwd(), path)}".`
+			);
+
+			// Read the package.json file
+			const pak = JSON.parse(
+				readFileSync(resolve(path, "package.json"), "utf8")
+			) as PluginPackage;
+
+			// Install the dependencies
+			try {
+				// Log a info message that we are installing the package dependencies
+				this.logger.info(
+					`Installing package dependencies for plugin §1${pak.name}§8@§1${pak.version}§r.`
+				);
+
+				// Execute the npm install command
+				await execSync("npm install", { stdio: "ignore", cwd: path });
+			} catch (reason) {
+				// Log the error
+				this.logger.error(
+					`Failed to install package dependencies for plugin §1${pak.name}§8@§1${pak.version}§r!`,
+					reason
+				);
+			}
+
+			// Check if the plugin need to be compiled
+			if (
+				exists(resolve(path, "tsconfig.json")) &&
+				!exists(resolve(path, "dist"))
+			) {
+				// Log a info message that we are compiling the plugin
+				this.logger.info(
+					`Compiling plugin §1${pak.name}§8@§1${pak.version}§r.`
+				);
+
+				// Execute the tsc command
+				try {
+					await execSync("npm run build", { stdio: "ignore", cwd: path });
+				} catch (reason) {
+					// Log the error
 					this.logger.error(
-						`Failed to create plugin.json for ${directory.name}`
+						`Failed to compile plugin §1${pak.name}§8@§1${pak.version}§r!`,
+						reason
 					);
 				}
 			}
 
-			// Read the plugin.json configuration file
-			const config = JSON.parse(
-				readFileSync(resolve(path, "plugin.json"), "utf8")
-			) as PluginConfig;
+			// Check if the path to the main file exists
+			// If it doesn't, then we will log a warning and skip this directory
+			if (!exists(resolve(path, pak.main))) {
+				// Log an warning message that the main file was not found
+				this.logger.warn(
+					`Unable to load plugin §1${pak.name}§8@§1${pak.version}§r, the main entry path "§8${relative(process.cwd(), resolve(path, pak.main))}§r" was not found in the directory.`
+				);
 
-			// Check if the plugin is using nodejs
-			if (config.node === true) {
-				// Check if the plugin contains a package.json file
-				if (!exists(resolve(path, "package.json"))) {
-					// Create the package.json file
-					try {
-						// Execute the npm init command
-						execSync("npm init -y", { stdio: "ignore", cwd: path });
-					} catch (reason) {
-						// Log the error
-						this.logger.error(
-							`Failed to create package.json for ${config.name}@${config.version}!`,
-							reason
-						);
-					}
-				}
-
-				// Check if the plugin contains a package-lock.json file
-				if (!exists(resolve(path, "package-lock.json"))) {
-					// Install the dependencies
-					try {
-						this.logger.info(
-							`Installing dependencies for ${config.name}@${config.version}...`
-						);
-
-						// Execute the npm install command
-						await execSync("npm install", { stdio: "ignore", cwd: path });
-					} catch (reason) {
-						// Log the error
-						this.logger.error(
-							`Failed to install dependencies for ${config.name}@${config.version}!`,
-							reason
-						);
-					}
-				}
+				// Skip this directory
+				continue;
 			}
 
-			// Check if the plugin is using typescript
-			if (config.typescript === true) {
-				// Check if the plugin contains a tsconfig.json file
-				if (!exists(resolve(path, "tsconfig.json"))) {
-					// Create the tsconfig.json file
-					try {
-						// Write the tsconfig.json file to the directory
-						await writeFileSync(
-							resolve(path, "tsconfig.json"),
-							TSCONFIG_TEMPLATE
-						);
+			// Import the plugin entry point
+			// eslint-disable-next-line @typescript-eslint/no-var-requires
+			const module = require(`${resolve(path, pak.main)}`) as PluginModule;
 
-						// Add the typescript compiler to the package.json file
-						await execSync("npm pkg set scripts.build=tsc", {
-							stdio: "ignore",
-							cwd: path
-						});
-					} catch (reason) {
-						this.logger.error(
-							`Failed to create tsconfig.json for ${config.name}@${config.version}`,
-							reason
-						);
-					}
-				}
+			// console.log(instance);
 
-				// Check if the dist directory exists or if the plugin is in development mode
-				if (!exists(resolve(path, "dist")) || config.mode === "development") {
-					// Build the typescript files
-					try {
-						this.logger.info(
-							`Building typescript files for ${config.name}@${config.version}...`
-						);
+			// // Get the exported module
+			// const module = instance["default"] as PluginModule;
 
-						// Execute the build script
-						await execSync("npm run build", { stdio: "ignore", cwd: path });
-					} catch (reason) {
-						// Log the error
-						this.logger.error(
-							`Failed to build typescript files for ${config.name}@${config.version}!`,
-							reason
-						);
-					}
-				}
-			}
+			// Create a new logger instance
+			const logger = new Logger(
+				`${pak.name}@${pak.version}`,
+				LoggerColors.Blue
+			);
 
-			try {
-				// Resolve the path to the directory
-				const path = resolve(this.path, directory.name);
+			// Create a new plugin object
+			const plugin: Plugin = {
+				package: pak,
+				module,
+				logger,
+				path,
+				reloadable: pak.reloadable ?? false
+			};
 
-				// Read the plugin.json configuration file
-				const config = JSON.parse(
-					readFileSync(resolve(path, "plugin.json"), "utf8")
-				) as PluginConfig;
+			// Store the plugin in the registry
+			this.entries.set(pak.name, plugin);
 
-				// Import the plugin entry point
-				const instance = await import(`file://${resolve(path, config.entry)}`);
-
-				// Get the exported module
-				const module = instance["default"];
-
-				// Adjust the color to match the logger colors
-				const adjustedColor = config.color
-					.split("_")
-					.map((part) => {
-						return part.charAt(0).toUpperCase() + part.slice(1);
-					})
-					.join("");
-
-				// Get the color from the logger colors
-				const color =
-					LoggerColors[adjustedColor as keyof typeof LoggerColors] ??
-					LoggerColors.White;
-
-				// Create a new logger instance
-				const logger = new Logger(`${config.name}@${config.version}`, color);
-
-				// Create a new plugin object
-				const plugin = { config, module, logger };
-
-				// Store the plugin in the registry
-				this.entries.set(config.name, plugin);
-
-				// Initialize the plugin
-				if (module.onInitialize) {
-					await module.onInitialize(...arguments_, plugin);
-				}
-
-				// Emit the register event
-				this.emit("register", plugin);
-			} catch (reason) {
-				this.logger.error(`Failed to load plugin! ${directory.name}`, reason);
+			// Initialize the plugin
+			if (module.onInitialize) {
+				await module.onInitialize(...arguments_, plugin);
 			}
 		}
 
-		// Log the success message
+		// Map the plugins to a string array
 		const plugins = [...this.entries.values()].map(
-			(plugin) => `${plugin.config.name}@${plugin.config.version}`
+			(plugin) => `§1${plugin.package.name}§8@§1${plugin.package.version}§r`
 		);
 		const s = plugins.length > 1 ? "s" : "";
+
+		// Log the success message
 		this.logger.success(
-			`Successfully initialized a total of ${plugins.length} plugin${s}! §c${plugins.join(
-				"§r, §c"
-			)}§r`
+			`Initializing §c${plugins.length}§r plugin${s}: ${plugins.join(", ")}§r`
 		);
 	}
 
@@ -288,6 +256,90 @@ class Plugins extends Emitter<PluginEvents> {
 				await plugin.module.onShutdown(...arguments_, plugin);
 			}
 		}
+	}
+
+	/**
+	 * Reloads a plugin by its name.
+	 * @param name - The name of the plugin.
+	 * @param arguments_ - The arguments to pass to the plugin.
+	 */
+	public async reload(
+		name: string,
+		...arguments_: Array<unknown>
+	): Promise<void> {
+		// Get the plugin from the registry
+		const plugin = this.entries.get(name);
+
+		// Check if the plugin exists
+		if (!plugin) throw new Error(`Plugin ${name} not found!`);
+
+		// Call the onShutdown method
+		if (plugin.module.onShutdown) {
+			await plugin.module.onShutdown(...arguments_, plugin);
+		}
+
+		const { path, package: pak } = plugin;
+
+		// Remove the plugin from the registry
+		this.entries.delete(name);
+
+		// Delete the require cache
+		// eslint-disable-next-line @typescript-eslint/no-dynamic-delete
+		delete require.cache[require.resolve(path)];
+
+		// Import the plugin entry point
+		// eslint-disable-next-line @typescript-eslint/no-var-requires
+		const module = require(`${resolve(path, pak.main)}`) as PluginModule;
+
+		// Create a new logger instance
+		const logger = new Logger(
+			`${pak.name}@${pak.version}.r`,
+			LoggerColors.Blue
+		);
+
+		// Create a new plugin object
+		const reloaded: Plugin = {
+			package: pak,
+			module,
+			logger,
+			path,
+			reloadable: pak.reloadable ?? false
+		};
+
+		// Store the plugin in the registry
+		this.entries.set(pak.name, reloaded);
+
+		// Log the success message
+		this.logger.success(`Reloaded plugin §1${pak.name}§8@§1${pak.version}§r.`);
+
+		// Check if the plugin has an onInitialize method
+		if (module.onInitialize) {
+			// Call the onInitialize method
+			await module.onInitialize(...arguments_, reloaded);
+		}
+
+		// Check if the plugin has an onStartup method
+		if (module.onStartup) {
+			// Call the onStartup method
+			await module.onStartup(...arguments_, reloaded);
+		}
+	}
+
+	/**
+	 * Gets all the currently loaded plugins.
+	 * @returns All the currently loaded plugins.
+	 */
+	public getAll(): Array<Plugin> {
+		return [...this.entries.values()];
+	}
+
+	/**
+	 * Gets a plugin by its name.
+	 * @param name - The name of the plugin.
+	 * @returns The plugin or undefined if not found.
+	 */
+	public get(name: string): Plugin | undefined {
+		return this.entries.get(name);
 	}
 
 	/**

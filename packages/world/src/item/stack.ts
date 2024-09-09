@@ -1,7 +1,14 @@
 import { ItemType, type Items } from "@serenityjs/item";
-import { CompoundTag } from "@serenityjs/nbt";
+import {
+	ByteTag,
+	CompoundTag,
+	ListTag,
+	ShortTag,
+	StringTag,
+	Tag
+} from "@serenityjs/nbt";
 
-import { ItemComponent } from "../components";
+import { ItemComponent, ItemTagComponent } from "../components";
 
 import type {
 	NetworkItemInstanceDescriptor,
@@ -67,6 +74,26 @@ class ItemStack<T extends keyof Items = keyof Items> {
 		// Register the type components to the item.
 		for (const component of ItemComponent.registry.get(identifier) ?? [])
 			new component(this, component.identifier);
+
+		// Register the tag components to the item.
+		for (const tag of this.type.tags) {
+			// Get the component from the registry
+			const component = [...ItemComponent.components.values()].find((x) => {
+				// If the identifier is undefined, we will skip it.
+				if (!x.identifier || !(x.prototype instanceof ItemTagComponent))
+					return false;
+
+				// Initialize the component as a BlockStateComponent.
+				const component = x as typeof ItemTagComponent;
+
+				// Check if the identifier includes the key.
+				// As some states dont include a namespace.
+				return component.tag === tag;
+			});
+
+			// Check if the component exists.
+			if (component) new component(this, component.identifier);
+		}
 	}
 
 	/**
@@ -123,12 +150,41 @@ class ItemStack<T extends keyof Items = keyof Items> {
 	 * @returns If the item stack is equal to the other item stack.
 	 */
 	public equals(item: ItemStack): boolean {
-		// TODO: Check if the item nbts are equal, and if the item components are equal.
+		// Check if the identifiers & metadata are equal.
+		if (this.type.identifier !== item.type.identifier) return false;
+		if (this.metadata !== item.metadata) return false;
+		if (this.components.size !== item.components.size) return false;
 
-		return (
-			this.type.identifier === item.type.identifier &&
-			this.metadata === item.metadata
-		);
+		// Iterate over the components and check if they are equal.
+		for (const component of this.components.values()) {
+			// Check if the item has the component.
+			if (!item.components.has(component.identifier)) return false;
+
+			// Get the component from the item.
+			const other = item.components.get(
+				component.identifier
+			) as ItemComponent<T>;
+
+			// Check if the components are equal.
+			if (!component.equals(other)) return false;
+		}
+
+		// Iterate over the components of the other item.
+		for (const component of item.components.values()) {
+			// Check if the item has the component.
+			if (!this.components.has(component.identifier)) return false;
+
+			// Get the component from the item.
+			const other = this.components.get(
+				component.identifier
+			) as ItemComponent<T>;
+
+			// Check if the components are equal.
+			if (!component.equals(other)) return false;
+		}
+
+		// Return true if all checks passed.
+		return true;
 	}
 
 	/**
@@ -181,6 +237,14 @@ class ItemStack<T extends keyof Items = keyof Items> {
 		identifier: K
 	): void {
 		this.components.delete(identifier);
+	}
+
+	/**
+	 * Checks if the item is smeltable.
+	 * @returns If the item is smeltable.
+	 */
+	public isSmeltable(): boolean {
+		return this.hasComponent("minecraft:smeltable");
 	}
 
 	/**
@@ -264,6 +328,104 @@ class ItemStack<T extends keyof Items = keyof Items> {
 		metadata?: number
 	): ItemStack<T> {
 		return new ItemStack(type.identifier, amount, metadata);
+	}
+
+	/**
+	 * Serializes the item stack into a CompoundTag.
+	 *
+	 * This method converts the item stack's properties and components into a CompoundTag,
+	 * which can be used for storage or network transmission.
+	 *
+	 * @returns The serialized representation of the item stack.
+	 */
+	public static serialize(itemStack: ItemStack, tagName?: string): CompoundTag {
+		// Create the root tag.
+		const root = new CompoundTag(tagName).addTag(
+			new StringTag("Name", itemStack.type.identifier),
+			new ByteTag("Count", itemStack.amount),
+			new ShortTag("Damage", itemStack.metadata)
+		);
+
+		// Create a components list tag.
+		const components = new ListTag<CompoundTag>(
+			"SerenityComponents",
+			[],
+			Tag.Compound
+		);
+
+		// Add the components to the root tag.
+		root.addTag(components);
+
+		// Iterate over the components and serialize them.
+		for (const component of itemStack.getComponents()) {
+			// Get the component type.
+			const type = ItemComponent.components.get(component.identifier);
+			if (!type) continue;
+
+			// Create a data compound tag for the data to be written to.
+			// And serialize the component.
+			const data = new CompoundTag("data");
+			type.serialize(data, component);
+
+			// Create the component tag.
+			const componentTag = new CompoundTag().addTag(
+				new StringTag("identifier", component.identifier),
+				data
+			);
+
+			// Add the component to the list.
+			components.push(componentTag);
+		}
+
+		// Return the root tag.
+		return root;
+	}
+
+	/**
+	 * Deserializes a CompoundTag into an ItemStack.
+	 *
+	 * This method takes a CompoundTag, extracts the necessary information,
+	 * and constructs an ItemStack object from it.
+	 *
+	 * @param tag The CompoundTag containing the serialized item stack data.
+	 * @returns The deserialized Itemstack
+	 * @throws Will throw an error if the tag does not contain a valid item identifier.
+	 */
+	public static deserialize(tag: CompoundTag): ItemStack {
+		// Create the item stack.
+		const itemIdentifier = tag.getTag<StringTag>("Name");
+
+		// Check if the item identifier is invalid.
+		if (!itemIdentifier) throw new Error(`Invalid item tag`);
+
+		// Creat the item stack.
+		const item = new ItemStack(
+			itemIdentifier.value as keyof Items,
+			tag.getTag<ByteTag>("Count")?.value ?? 1,
+			tag.getTag<ShortTag>("Damage")?.value ?? 0
+		);
+
+		// Deserialize the components.
+		const components = tag.getTag<ListTag<CompoundTag>>("SerenityComponents");
+		for (const componentTag of components?.value ?? []) {
+			// Get the component identifier.
+			const identifier = componentTag.getTag<StringTag>("identifier")?.value;
+			if (!identifier) continue;
+
+			// Get the component data.
+			const data = componentTag.getTag<CompoundTag>("data");
+			if (!data) continue;
+
+			// Get the component type.
+			const type = ItemComponent.components.get(identifier);
+			if (!type) continue;
+
+			// Deserialize the component.
+			type.deserialize(data, item);
+		}
+
+		// Return the item stack.
+		return item;
 	}
 }
 

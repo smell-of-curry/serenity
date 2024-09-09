@@ -5,9 +5,11 @@ import {
 	AttributeName,
 	EffectType,
 	Gamemode,
-	ItemUseOnEntityInventoryTransactionType,
 	Vector3f
 } from "@serenityjs/protocol";
+import { EntityIdentifier } from "@serenityjs/entity";
+
+import { EntityInteractType } from "../../../enums";
 
 import { EntityAttributeComponent } from "./attribute";
 
@@ -19,6 +21,8 @@ class EntityHealthComponent extends EntityAttributeComponent {
 	 * The identifier of the component.
 	 */
 	public static readonly identifier = AttributeName.Health;
+
+	public static readonly types = [EntityIdentifier.Player];
 
 	/**
 	 * The minimum health allowed for the entity.
@@ -118,15 +122,12 @@ class EntityHealthComponent extends EntityAttributeComponent {
 		return this.getCurrentValue();
 	}
 
-	public onInteract(
-		player: Player,
-		type: ItemUseOnEntityInventoryTransactionType
-	): void {
+	public onInteract(player: Player, type: EntityInteractType): void {
 		/**
 		 * TODO: Calculate the damage based on the player, projectile , etc.
 		 */
 		// Check if the player is attacking the entity
-		if (type !== ItemUseOnEntityInventoryTransactionType.Attack) return;
+		if (type !== EntityInteractType.Attack) return;
 		// Exhaust the player after attacking
 		player.exhaust(0.1);
 

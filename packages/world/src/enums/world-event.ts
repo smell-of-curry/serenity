@@ -1,0 +1,33 @@
+enum WorldEvent {
+	WorldInitialize,
+	WorldTick,
+	WorldMessage,
+	EntitySpawned,
+	EntityDespawned,
+	EntityEffectAdd,
+	EntityEffectRemove,
+	EntityDie,
+	EntityTeleport,
+	PlayerJoin,
+	PlayerLeave,
+	PlayerInitialize,
+	PlayerChat,
+	PlayerExecuteCommand,
+	PlayerPlaceBlock,
+	PlayerBreakBlock,
+	PlayerInteractWithEntity,
+	PlayerInteractWithBlock,
+	PlayerButtonPush,
+	PlayerItemConsume,
+	PlayerMissSwing,
+	PlayerOpenDoor,
+	PlayerJump,
+	PlayerStartSwimming,
+	PlayerStopSwimming,
+	BlockUpdate,
+	FurnaceSmelt,
+	ChunkRead,
+	ChunkWrite
+}
+
+export { WorldEvent };

@@ -1,13 +1,14 @@
 import { Endianness } from "@serenityjs/binarystream";
 import { DataType } from "@serenityjs/raknet";
 
+import type { IPosition } from "../../types";
 import type { BinaryStream } from "@serenityjs/binarystream";
 
 /**
  * A 3D vector with floating point precision.
  *
  */
-class Vector3f extends DataType {
+class Vector3f extends DataType implements IPosition {
 	/**
 	 * The x coordinate of the vector.
 	 */
@@ -140,6 +141,14 @@ class Vector3f extends DataType {
 	}
 
 	/**
+	 * Calculates the square length of this 3D vector.
+	 * @returns the square length of the 3D vector.
+	 */
+	public lengthSqrt(): number {
+		return this.x * this.x + this.y * this.y + this.z * this.z;
+	}
+
+	/**
 	 * Normalizes this 3D vector.
 	 * @returns The normalized 3D vector.
 	 */
@@ -194,6 +203,14 @@ class Vector3f extends DataType {
 	 */
 	public distance(other: Vector3f): number {
 		return Math.hypot(this.x - other.x, this.y - other.y, this.z - other.z);
+	}
+
+	/**
+	 * Computes the absolute value of each coordinate of the 3D vector.
+	 * @returnsthe absolute value of this 3D vector.
+	 */
+	public absolute(): Vector3f {
+		return new Vector3f(Math.abs(this.x), Math.abs(this.y), Math.abs(this.z));
 	}
 
 	/**

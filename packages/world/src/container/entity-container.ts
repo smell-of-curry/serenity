@@ -2,6 +2,7 @@ import {
 	type ContainerId,
 	ContainerOpenPacket,
 	type ContainerType,
+	InventoryContentPacket,
 	InventorySlotPacket,
 	NetworkItemStackDescriptor
 } from "@serenityjs/protocol";
@@ -74,6 +75,7 @@ class EntityContainer extends Container {
 
 		// Set properties of the packet.
 		packet.containerId = this.identifier;
+		packet.dynamicContainerId = 0; // TODO: Implement dynamic containers.
 		packet.slot = slot;
 		packet.item = ItemStack.toNetworkStack(item);
 
@@ -89,9 +91,14 @@ class EntityContainer extends Container {
 		// Find a slot that has the same item type and isn't full (x64)
 		// If there is no slot, find the next empty slot.
 		const slot = this.storage.findIndex((slot) => {
-			if (slot === null) return false;
+			// Check if the slot is empty.
+			if (!slot) return false;
 
-			return slot.type === item.type && slot.amount < item.maxAmount;
+			// Check if the item can be stacked.
+			if (slot.amount >= item.maxAmount) return false;
+
+			// Check if the item is equal to the slot.
+			return item.equals(slot);
 		});
 
 		// Check if the item is maxed.
@@ -204,15 +211,15 @@ class EntityContainer extends Container {
 	 * Swaps items in the container.
 	 * @param slot The slot to swap the item from.
 	 * @param otherSlot The slot to swap the item to.
-	 * @param otherCatainer The other container to swap the item with.
+	 * @param otherContainer The other container to swap the item with.
 	 */
 	public swapItems(
 		slot: number,
 		otherSlot: number,
-		otherCatainer?: Container
+		otherContainer?: Container
 	): void {
 		// Assign the target container
-		const targetContainer = otherCatainer ?? this;
+		const targetContainer = otherContainer ?? this;
 
 		// Get the items in the slots
 		const item = this.getItem(slot);
@@ -246,11 +253,47 @@ class EntityContainer extends Container {
 
 		// Set properties of the packet.
 		packet.containerId = this.identifier;
+		packet.dynamicContainerId = 0; // TODO: Implement dynamic containers.
 		packet.slot = slot;
 		packet.item = new NetworkItemStackDescriptor(0);
 
 		// Send the packet to the player.
 		this.entity.session.send(packet);
+	}
+
+	/**
+	 * Clears all slots in the container.
+	 */
+	public clear(): void {
+		for (let slot = 0; slot < this.storage.length; slot++) {
+			this.clearSlot(slot);
+		}
+	}
+
+	/**
+	 * Syncs the container contents to a player.
+	 * @param player The player to sync the container to.
+	 */
+	public sync(player: Player): void {
+		// Create a new InventoryContentPacket.
+		const packet = new InventoryContentPacket();
+
+		// Set the properties of the packet.
+		packet.containerId = this.identifier;
+		packet.dynamicContainerId = 0; // TODO: Implement dynamic containers.
+
+		// Map the items in the storage to network item stack descriptors.
+		packet.items = this.storage.map((item) => {
+			// If the item is null, return a new NetworkItemStackDescriptor.
+			// This will indicate that the slot is empty.
+			if (!item) return new NetworkItemStackDescriptor(0);
+
+			// Convert the item stack to a network item stack descriptor
+			return ItemStack.toNetworkStack(item);
+		});
+
+		// Send the packet to the player.
+		return player.session.send(packet);
 	}
 
 	public show(player: Player): void {

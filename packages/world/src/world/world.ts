@@ -6,13 +6,18 @@ import {
 	TextPacketType
 } from "@serenityjs/protocol";
 import { Logger, LoggerColors } from "@serenityjs/logger";
+import Emitter from "@serenityjs/emitter";
 import { Commands } from "@serenityjs/command";
 
-import { COMMON_COMMANDS } from "../commands";
-import { ADMIN_COMMANDS } from "../commands/admin";
+// import { COMMON_COMMANDS } from "../commands";
+// import { ADMIN_COMMANDS } from "../commands/admin";
+import { Scoreboard } from "../scoreboard";
+import { WorldMessageSignal, WorldTickSignal } from "../events";
+import { ADMIN_COMMANDS, COMMON_COMMANDS } from "../commands";
 
 import { Dimension } from "./dimension";
 
+import type { DimensionBounds, WorldEventSignals } from "../types";
 import type { TerrainGenerator } from "../generator";
 import type { Entity } from "../entity";
 import type { WorldProvider } from "../provider";
@@ -37,12 +42,22 @@ class World {
 	/**
 	 * The commands for the world.
 	 */
-	public readonly commands: Commands<Entity | Dimension>;
+	public readonly commands: Commands<Dimension | Entity>;
+
+	/**
+	 * The scoreboard for the world.
+	 */
+	public readonly scoreboard = new Scoreboard(this);
 
 	/**
 	 * The logger for the world.
 	 */
 	public readonly logger: Logger;
+
+	/**
+	 * The emitter for the world.
+	 */
+	public emitter: Emitter<WorldEventSignals>;
 
 	/**
 	 * The current tick of the world.
@@ -58,26 +73,46 @@ class World {
 	 * Creates a new world instance.
 	 * @param identifier The identifier of the world.
 	 * @param provider The data provider for the world.
+	 * @param emitter The emitter for the world.
 	 * @returns A new world instance with the specified identifier and provider.
 	 */
-	public constructor(identifier: string, provider: WorldProvider) {
+	public constructor(
+		identifier: string,
+		provider: WorldProvider,
+		emitter?: Emitter<WorldEventSignals>
+	) {
 		this.identifier = identifier;
 		this.provider = provider;
 		this.dimensions = new Map();
 		this.commands = new Commands();
 		this.logger = new Logger(identifier, LoggerColors.GreenBright);
+		this.emitter = emitter ?? new Emitter();
 
 		// Register the default comman and admin commands
 		for (const register of [...COMMON_COMMANDS, ...ADMIN_COMMANDS])
 			register(this);
+
+		// Assign the world to the provider
+		this.provider.world = this;
 	}
 
 	/**
 	 * Ticks the world instance.
 	 */
-	public tick(): void {
+	public tick(deltaTick: number): void {
 		// Check if there are no players in the world
 		if (this.getPlayers().length === 0) return;
+
+		// Create a new tick signal
+		const signal = new WorldTickSignal(
+			this.currentTick,
+			BigInt(deltaTick),
+			this
+		);
+
+		// Emit the tick signal
+		const value = signal.emit();
+		if (value === false) return;
 
 		// Add one to the current tick
 		this.currentTick++;
@@ -89,7 +124,7 @@ class World {
 		// Tick all the dimensions
 		for (const dimension of this.dimensions.values())
 			try {
-				dimension.tick();
+				dimension.tick(deltaTick);
 			} catch (reason) {
 				this.logger.error(
 					`Failed to tick dimension "${dimension.identifier}"`,
@@ -137,29 +172,30 @@ class World {
 	}
 
 	/**
-	 * Creates a new dimension.
-	 *
+	 * Creates a new dimension for the world.
 	 * @param identifier The identifier of the dimension.
 	 * @param type The type of the dimension.
 	 * @param generator The generator of the dimension.
-	 * @returns A new dimension.
+	 * @returns The dimension that was created.
 	 */
 	public createDimension(
 		identifier: string,
 		type: DimensionType,
-		generator: TerrainGenerator
+		generator: TerrainGenerator,
+		bounds?: DimensionBounds
 	): Dimension {
 		// Check if the dimension already exists
 		if (this.dimensions.has(identifier)) {
 			this.logger.error(
-				`Failed to create dimension "${identifier}," it already exists.`
+				`Failed to create dimension "${identifier}", as it already exists in the world.`
 			);
 
+			// Return the existing dimension
 			return this.dimensions.get(identifier) as Dimension;
 		}
 
 		// Create the dimension
-		const dimension = new Dimension(identifier, type, generator, this);
+		const dimension = new Dimension(identifier, type, generator, this, bounds);
 
 		// Set the dimension
 		this.dimensions.set(identifier, dimension);
@@ -203,6 +239,15 @@ class World {
 	 * @param message The message to send.
 	 */
 	public sendMessage(message: string): void {
+		// Create a new WorldMessageSignal
+		const signal = new WorldMessageSignal(this, message);
+
+		// Emit the signal and get the value
+		const value = signal.emit();
+
+		// Check if the signal was cancelled
+		if (value === false) return;
+
 		// Create a new TextPacket
 		const packet = new TextPacket();
 
@@ -210,11 +255,11 @@ class World {
 		packet.type = TextPacketType.Raw;
 		packet.needsTranslation = false;
 		packet.source = null;
-		packet.message = message;
+		packet.message = signal.message;
 		packet.parameters = null;
 		packet.xuid = "";
 		packet.platformChatId = "";
-		packet.filtered = message;
+		packet.filtered = signal.message;
 
 		// Broadcast the packet
 		this.broadcast(packet);

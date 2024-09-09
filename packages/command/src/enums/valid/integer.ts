@@ -1,12 +1,12 @@
 import { ValidEnum } from "./valid";
 
-import type { CommandExecutionState } from "../../execution-state";
+import type { CommandArgumentPointer } from "../../execution-state";
 
 class IntegerEnum extends ValidEnum {
 	/**
 	 * The type of the enum.
 	 */
-	public static readonly name = "number";
+	public static readonly identifier = "integer";
 
 	/**
 	 * The symbol of the enum.
@@ -16,34 +16,53 @@ class IntegerEnum extends ValidEnum {
 	/**
 	 * The result of the enum.
 	 */
-	public readonly result: number;
+	public readonly result: number | null;
 
-	public constructor(result: number) {
+	public constructor(result: number | null) {
 		super();
 		this.result = result;
 	}
 
-	public static extract<O>(
-		state: CommandExecutionState<O>
-	): IntegerEnum | undefined {
-		// Read next argument in slice array.
-		const text = state.readNext();
+	public validate(_error?: boolean): boolean {
+		// Check if the value is null.
+		if (this.result === null) {
+			// Check if we should throw an error.
+			if (_error)
+				throw new TypeError('Expected type "integer" after previous argument.');
 
-		// Ensure the argument is valid and defined.
-		if (typeof text === "string") {
-			// If an empty string call extract again to try next argument.
-			if (text.length === 0) return this.extract(state);
+			// Return false.
+			return false;
+		}
 
-			// Attempt to parse argument as a float.
-			const number = Number.parseFloat(text);
+		// Return true.
+		return true;
+	}
 
-			// If not NaN return the integer.
-			if (!Number.isNaN(number)) return new IntegerEnum(number);
-			// Otherwise throw syntax error with tip.
-			throw new TypeError(`Expected integer or floating point!`);
+	public static extract(pointer: CommandArgumentPointer): IntegerEnum | null {
+		// Peek the next value from the pointer.
+		let peek = pointer.peek();
 
-			// If argument is invalid/undefined throw expected argument syntax error.
-		} else throw new Error("Expected argument!");
+		// Check if the peek value is null.
+		if (!peek) return new IntegerEnum(null);
+
+		// Read the next value from the pointer.
+		peek = pointer.next() as string;
+
+		// Check if the value can be a boolean.
+		if (peek === "true")
+			// Return the value as an integer.
+			return new IntegerEnum(1);
+
+		// Check if the value can be a boolean.
+		if (peek === "false")
+			// Return the value as an integer.
+			return new IntegerEnum(0);
+
+		// Check if the value can be a number or a float.
+		if (+peek >= 0 || +peek <= 0) return new IntegerEnum(+(peek as string));
+
+		// Return null if the value is not a number.
+		return new IntegerEnum(null);
 	}
 }
 

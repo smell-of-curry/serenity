@@ -24,12 +24,21 @@ class EntityPhysicsComponent extends EntityComponent {
 	public onTick(): void {
 		// Check if the entity is on the ground
 		if (this.entity.onGround) return;
+		const entityHasGravity = this.entity.getComponent("minecraft:has_gravity");
+
+		// If the entity does not have gravity or it is not enabled, return immediately
+		if (!entityHasGravity || !entityHasGravity.getCurrentValue()) return;
 
 		// Check how many blocks is between the entity and the nearest ground block
 		const { y } = this.entity.position;
 
 		// Round the position of the entity to the nearest whole number
 		const position = this.entity.position.floor();
+
+		// // Get the collision box of the entity
+		// const entityCollisionBox = this.entity.getComponent(
+		// 	"minecraft:collision_box"
+		// );
 
 		// We want gravity to be a constant force, which means we dont want the entity to fall faster the further it is from the ground.
 		// Calculate the distance between the entity and the nearest ground block
@@ -39,6 +48,27 @@ class EntityPhysicsComponent extends EntityComponent {
 		// Check if the distance is greater than 0, if so, apply gravity
 		// If the distance is less than 0, the entity is below the ground, so we should teleport the entity to the ground
 		// If the distance is equal to 0, the entity is on the ground, so we should stop applying gravity
+
+		// we want to stop his horizontal speed a block collides with an entity
+		// Realize a ray from the actual entity position to the new entity position based on his velocity
+		// Provide the entity collision box (Only used to detect entity to entity collisions)
+		// Filter if the hit entity is not the same entity or the entity is not alive
+
+		// TODO: Fix this
+
+		// const hit = Raycaster.clip(
+		// 	this.entity.dimension,
+		// 	this.entity.position,
+		// 	this.entity.position.add(this.entity.velocity),
+		// 	entityCollisionBox?.collisionBox,
+		// 	(entity) => entity.unique == this.entity.unique || !entity.isAlive
+		// );
+
+		// if (hit && this.entity.hasComponent("minecraft:projectile")) {
+		// 	// If the entity is a projectile we want to notify the collition
+		// 	this.entity.getComponent("minecraft:projectile").onHit(hit);
+		// }
+
 		if (distance > 0) {
 			// Apply gravity to the entity
 			this.entity.velocity.y -= this.gravity;
@@ -63,7 +93,6 @@ class EntityPhysicsComponent extends EntityComponent {
 			this.entity.velocity.x *= 0.25;
 			this.entity.velocity.z *= 0.25;
 		}
-
 		// Move the entity to the new position
 		this.entity.teleport(this.entity.position);
 

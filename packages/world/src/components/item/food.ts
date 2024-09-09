@@ -1,7 +1,9 @@
 import { ItemIdentifier, type Items } from "@serenityjs/item";
+import { ItemUseMethod } from "@serenityjs/protocol";
 
 import { ItemUseCause } from "../../enums";
 import { ItemStack } from "../../item";
+import { PlayerItemConsumeSignal } from "../../events";
 
 import { ItemComponent } from "./item-component";
 
@@ -34,9 +36,9 @@ class ItemFoodComponent<T extends keyof Items> extends ItemComponent<T> {
 		super(item, ItemFoodComponent.identifier);
 	}
 
-	public onUse(player: Player, cause: ItemUseCause): boolean {
-		if (cause != ItemUseCause.Use || !player.usingItem) return false;
-		if (!this.canAlwaysEat && !player.isHungry()) return false;
+	public onUse(player: Player, cause: ItemUseCause): ItemUseMethod | undefined {
+		if (cause != ItemUseCause.Use || !player.usingItem) return;
+		if (!this.canAlwaysEat && !player.isHungry()) return;
 		// ? Get the player hunger, saturation and inventory
 		const hungerComponent = player.getComponent("minecraft:player.hunger");
 		const saturationComponent = player.getComponent(
@@ -45,6 +47,11 @@ class ItemFoodComponent<T extends keyof Items> extends ItemComponent<T> {
 		const { container, selectedSlot } = player.getComponent(
 			"minecraft:inventory"
 		);
+		const signal = new PlayerItemConsumeSignal(player, player.usingItem);
+		const canceled = signal.emit();
+
+		if (!canceled) return;
+
 		// ? Increase the food based on nutrition
 		hungerComponent.increaseValue(this.nutrition);
 		// ? Add a saturation buff using the formula nutrition * saturationModifier * 2
@@ -60,19 +67,19 @@ class ItemFoodComponent<T extends keyof Items> extends ItemComponent<T> {
 
 			if (player.usingItem.amount > 0) {
 				container.addItem(convertedItemStack);
-				return true;
+				return ItemUseMethod.Eat;
 			}
 			container.setItem(selectedSlot, convertedItemStack);
 		}
-		return true;
+		return ItemUseMethod.Eat;
 	}
 
 	/**
 	 * ? Necessary methods to make it work lol
 	 */
-	public onStartUse(player: Player, cause: ItemUseCause): void {}
+	public onStartUse(_player: Player, _cause: ItemUseCause): void {}
 
-	public onStopUse(player: Player, cause: ItemUseCause): void {}
+	public onStopUse(_player: Player, _cause: ItemUseCause): void {}
 }
 
 export { ItemFoodComponent };

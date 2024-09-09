@@ -2,7 +2,7 @@ import {
 	DisconnectReason,
 	SetLocalPlayerAsInitializedPacket
 } from "@serenityjs/protocol";
-import { PlayerStatus } from "@serenityjs/world";
+import { PlayerInitializeSignal } from "@serenityjs/world";
 
 import { SerenityHandler } from "./serenity-handler";
 
@@ -28,14 +28,20 @@ class SetLocalPlayerAsIntialized extends SerenityHandler {
 		if (this.serenity.connecting.has(session))
 			this.serenity.connecting.delete(session);
 
-		// Spawn the player in the dimension
-		player.status = PlayerStatus.Spawned;
+		// Create a new PlayerInitializeSignal
+		const signal = new PlayerInitializeSignal(player);
+		const value = signal.emit();
 
-		// Sync the player
-		player.sync();
+		// Check if the signal was cancelled
+		if (value === false) return;
+
+		// Spawn the player
+		player.spawn();
 
 		// Send the player joined message
-		player.dimension.sendMessage(`§e${player.username} joined the game.§r`);
+		player.dimension.world.sendMessage(
+			`§e${player.username} joined the game.§r`
+		);
 
 		// Log the player joined message
 		player.dimension.world.logger.info(

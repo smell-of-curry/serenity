@@ -1,71 +1,85 @@
-import { CommandPermissionLevel } from "@serenityjs/protocol";
 import { IntegerEnum } from "@serenityjs/command";
+import { CommandPermissionLevel } from "@serenityjs/protocol";
 
 import { ItemEnum, TargetEnum } from "../enums";
-import { Player } from "../../player";
 
+import type { Entity } from "../../entity";
 import type { World } from "../../world";
 
 const register = (world: World) => {
+	// Register the clear command
 	world.commands.register(
 		"clear",
 		"Clears items from player inventory.",
-		(origin, parameters) => {
-			const targets = parameters.player?.result ?? [origin];
-			const itemName = parameters.itemName?.result;
-			const itemMetadata = parameters.data?.result ?? 0;
-			let itemAmount = parameters.maxCount?.result ?? Infinity;
-			let itemCount = 0;
+		(registry) => {
+			// Set the command to be an operator command
+			registry.permissionLevel = CommandPermissionLevel.Operator;
 
-			if (targets.length === 0)
-				return { message: "No targets matched selector" };
-			for (const player of targets) {
-				if (!(player instanceof Player)) continue;
-				const { container } = player.getComponent("minecraft:inventory");
+			// Create an overload for the command
+			registry.overload(
+				{
+					target: TargetEnum,
+					item: [ItemEnum, true],
+					metadata: [IntegerEnum, true],
+					amount: [IntegerEnum, true]
+				},
+				(context) => {
+					// Get the targets from the context
+					const targets = context.target.result as Array<Entity>;
 
-				if (!itemName) {
-					container.storage.map((item, index) => {
-						if (!item) return;
-						itemCount += item?.amount;
-						container.clearSlot(index);
-					});
-					continue;
+					// Get the result of the item, amount, and metadata
+					const itemResult = context.item?.result as string | undefined;
+					const itemIdentifier = itemResult
+						? `${itemResult.includes(":") ? "" : "minecraft:"}${itemResult}`
+						: undefined;
+					const itemMetadata = context.metadata?.result ?? 0;
+					const itemAmount = context.amount?.result;
+					let itemCount = 0;
+
+					if (targets.length === 0) {
+						return { message: "No targets matched selector" };
+					}
+
+					for (const target of targets) {
+						if (!target.hasComponent("minecraft:inventory")) continue;
+						const { container } = target.getComponent("minecraft:inventory");
+
+						if (!itemResult) {
+							container.clear();
+							continue;
+						}
+
+						for (const [slot, itemStack] of Object.entries(container.storage)) {
+							if (
+								!itemStack ||
+								(itemStack.type.identifier !== itemIdentifier &&
+									itemStack.metadata !== itemMetadata)
+							) {
+								continue;
+							}
+
+							const stackAmount = itemStack.amount;
+							const remaining = stackAmount - (itemAmount ?? 1);
+
+							if (remaining < 0) {
+								container.clearSlot(Number.parseInt(slot));
+								itemCount += stackAmount;
+							} else {
+								itemStack.setAmount(Math.max(remaining, 0));
+								itemCount += Math.min(itemAmount ?? 1, stackAmount);
+							}
+
+							if (itemCount >= (itemAmount ?? 1)) break;
+						}
+					}
+
+					return {
+						message: `Cleared the inventory of ${targets.length} entities`
+					};
 				}
-				const itemSlots = container.storage
-					.map((item, slot) => ({ item, slot }))
-					.filter(
-						({ item }) =>
-							item?.type.identifier === itemName &&
-							item?.metadata === itemMetadata &&
-							item
-					);
-
-				for (const itemSlot of itemSlots) {
-					const { item } = itemSlot;
-
-					if (!item) continue;
-					const { amount } = item;
-					const remaining = amount - itemAmount;
-					item.setAmount(Math.max(remaining, 0));
-
-					itemCount += remaining < 0 ? amount : itemAmount;
-					itemAmount -= amount;
-					if (itemAmount < 0) break;
-				}
-			}
-			return {
-				message: `Cleared the inventory of ${targets.map((target) => (target as Player).username).join(", ")}, removing ${itemCount} items`
-			};
+			);
 		},
-		{
-			player: [TargetEnum, true],
-			itemName: [ItemEnum, true],
-			data: [IntegerEnum, true],
-			maxCount: [IntegerEnum, true]
-		},
-		{
-			permission: CommandPermissionLevel.Operator
-		}
+		() => {}
 	);
 };
 

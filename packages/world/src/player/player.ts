@@ -1,84 +1,48 @@
 import {
-	type AbilityFlag,
-	type AbilityLayerFlag,
+	AbilityIndex,
 	AbilityLayerType,
-	AddPlayerPacket,
+	ActorEventIds,
+	ActorEventPacket,
 	type BlockCoordinates,
 	ChangeDimensionPacket,
 	ContainerName,
 	Gamemode,
+	LevelSoundEvent,
+	LevelSoundEventPacket,
 	MoveMode,
 	MovePlayerPacket,
-	NetworkItemStackDescriptor,
-	type PermissionLevel,
+	PermissionLevel,
 	PlayStatus,
 	PlayStatusPacket,
-	PropertySyncData,
 	RespawnPacket,
 	RespawnState,
-	type SerializedSkin,
+	SerializedSkin,
 	SetPlayerGameTypePacket,
 	TeleportCause,
 	TextPacket,
 	TextPacketType,
 	TransferPacket,
 	UpdateAbilitiesPacket,
-	Vector3f
+	Vector3f,
+	AbilitySet,
+	type EffectType,
+	OnScreenTextureAnimationPacket,
+	ToastRequestPacket
 } from "@serenityjs/protocol";
-import { EntityIdentifier, EntityType } from "@serenityjs/entity";
+import { EntityIdentifier } from "@serenityjs/entity";
 
 import { Entity } from "../entity";
-import {
-	EntityAlwaysShowNametagComponent,
-	EntityHealthComponent,
-	EntityInventoryComponent,
-	EntityMovementComponent,
-	EntityNametagComponent,
-	EntityArmorComponent,
-	PlayerAttackMobsComponent,
-	PlayerAttackPlayersComponent,
-	PlayerBuildComponent,
-	PlayerChunkRenderingComponent,
-	type PlayerComponent,
-	PlayerCountComponent,
-	PlayerCursorComponent,
-	PlayerDoorsAndSwitchesComponent,
-	PlayerFlyingComponent,
-	PlayerFlySpeedComponent,
-	PlayerInstantBuildComponent,
-	PlayerInvulnerableComponent,
-	PlayerLightningComponent,
-	PlayerMayFlyComponent,
-	PlayerMineComponent,
-	PlayerMutedComponent,
-	PlayerNoClipComponent,
-	PlayerOpenContainersComponent,
-	PlayerOperatorCommandsComponent,
-	PlayerPrivilegedBuilderComponent,
-	PlayerTeleportComponent,
-	PlayerWalkSpeedComponent,
-	PlayerWorldBuilderComponent,
-	EntityComponent,
-	PlayerEntityRenderingComponent,
-	EntitySkinIDComponent,
-	PlayerHungerComponent,
-	PlayerExhaustionComponent,
-	PlayerSaturationComponent,
-	EntityHasGravityComponent,
-	EntityBreathingComponent,
-	PlayerExperienceLevelComponent,
-	PlayerExperienceComponent,
-	PlayerAbsorptionComponent,
-	PlayerCraftingInputComponent
-} from "../components";
-import { ItemStack } from "../item";
+import { PlayerComponent, EntityComponent } from "../components";
+import { EntitySpawnedSignal, PlayerMissSwingSignal } from "../events";
 
 import { PlayerStatus } from "./status";
+import { Device } from "./device";
 
+import type { ItemStack } from "../item";
+import type { PlayerOptions } from "./options";
 import type { Container } from "../container";
 import type { Dimension } from "../world";
 import type { PlayerComponents } from "../types/components";
-import type { LoginTokenData } from "../types/login-data";
 import type { NetworkSession } from "@serenityjs/network";
 
 /**
@@ -108,7 +72,17 @@ class Player extends Entity {
 	/**
 	 * The player's abilities.
 	 */
-	public readonly abilities = new Set<AbilityFlag>();
+	public readonly abilities = new Map<AbilityIndex, boolean>();
+
+	/**
+	 * The player's skin.
+	 */
+	public readonly skin: SerializedSkin;
+
+	/**
+	 * The player's device information.
+	 */
+	public readonly device: Device;
 
 	/**
 	 * The current status of the player's connection.
@@ -119,8 +93,6 @@ class Player extends Entity {
 	 * The player's permission level.
 	 */
 	public permission: PermissionLevel;
-
-	public readonly skin: SerializedSkin;
 
 	/**
 	 * The gamemode of the player.
@@ -138,6 +110,11 @@ class Player extends Entity {
 	public target: BlockCoordinates | null = null;
 
 	/**
+	 * The player spawn position
+	 */
+	public spawnPosition: BlockCoordinates = this.dimension.spawn;
+
+	/**
 	 * @readonly
 	 * The currently opened container visible to the player.
 	 */
@@ -148,6 +125,12 @@ class Player extends Entity {
 	 * The ItemStack the player is currently using.
 	 */
 	public usingItem: ItemStack | null = null;
+
+	/**
+	 * @readonly
+	 * The latest start item use tick
+	 */
+	public startUsingTick: bigint = -1n;
 
 	/**
 	 * @readonly
@@ -167,23 +150,24 @@ class Player extends Entity {
 	 */
 	public isFlying = false;
 
-	public constructor(
-		session: NetworkSession,
-		tokens: LoginTokenData,
-		dimension: Dimension,
-		permission: PermissionLevel,
-		skin: SerializedSkin
-	) {
-		super(EntityIdentifier.Player, dimension, session.guid);
-		this.session = session;
-		this.username = tokens.identityData.displayName;
-		this.xuid = tokens.identityData.XUID;
-		this.uuid = tokens.identityData.identity;
-		this.permission = permission;
-		this.skin = skin;
+	public constructor(dimension: Dimension, options: PlayerOptions) {
+		super(EntityIdentifier.Player, dimension);
+		this.session = options.session;
+		this.username = options.tokens.identityData.displayName;
+		this.xuid = options.tokens.identityData.XUID;
+		this.uuid = options.tokens.identityData.identity;
+		this.permission = options.permission;
+		this.skin = SerializedSkin.from(options.tokens.clientData);
+		this.device = new Device(options.tokens.clientData);
 
 		// Register the type components to the entity.
 		for (const component of EntityComponent.registry.get(
+			this.type.identifier
+		) ?? [])
+			new component(this, component.identifier);
+
+		// Register the type components to the player.
+		for (const component of PlayerComponent.registry.get(
 			this.type.identifier
 		) ?? [])
 			new component(this, component.identifier);
@@ -202,8 +186,20 @@ class Player extends Entity {
 	 * @param gamemode The gamemode to set.
 	 */
 	public setGamemode(gamemode: Gamemode): void {
+		// Get the previous gamemode of the player
+		const previous = this.gamemode;
+
 		// Set the gamemode of the player
 		this.gamemode = gamemode;
+
+		// Trigger the onGamemodeChange method fof all applicable components
+		for (const [, component] of this.components) {
+			// Check if the component is not a PlayerComponent
+			if (!(component instanceof PlayerComponent)) continue;
+
+			// Call the onGamemodeChange method of the component
+			component.onGamemodeChange?.(previous, gamemode);
+		}
 
 		// Create a new SetPlayerGameTypePacket
 		const packet = new SetPlayerGameTypePacket();
@@ -211,6 +207,11 @@ class Player extends Entity {
 
 		// Send the packet to the player
 		this.session.send(packet);
+
+		// Check if the player is in creative mode
+		if (gamemode === Gamemode.Creative) {
+			this.abilities.set(AbilityIndex.MayFly, true);
+		}
 	}
 
 	/**
@@ -237,7 +238,10 @@ class Player extends Entity {
 		super.sync();
 
 		// Sync the player's abilities
-		this.syncAbilities();
+		this.updateAbilities();
+
+		const inventory = this.getComponent("minecraft:inventory");
+		inventory.container.sync(this);
 
 		// Get the commands that are available to the player
 		const available = this.dimension.world.commands.serialize();
@@ -250,71 +254,32 @@ class Player extends Entity {
 		// Update the commands of the player
 		available.commands = filtered;
 
-		// Send the commands to the player
+		// Send the commands & playerList to the player
 		this.session.sendImmediate(available);
+	}
 
-		// TODO: Send the player the world settings.
+	/**
+	 * Checks if the player is an operator.
+	 * @returns If the player is an operator.
+	 */
+	public isOp(): boolean {
+		return this.permission === PermissionLevel.Operator;
 	}
 
 	/**
 	 * Spawns the player in the world.
 	 * @param player The player to spawn the player to.
 	 */
-	public spawn(player?: Player): void {
-		// Create a new AddPlayerPacket
-		const packet = new AddPlayerPacket();
+	public spawn(): void {
+		// Create a new EntitySpawnedSignal
+		const signal = new EntitySpawnedSignal(this, this.dimension);
+		const value = signal.emit();
 
-		// Get the players inventory
-		const inventory = this.getComponent("minecraft:inventory");
+		// Check if the signal was cancelled
+		if (!value) return this.despawn();
 
-		// Get the players held item
-		const heldItem = inventory.getHeldItem();
-
-		// Set the packet properties
-		packet.uuid = this.uuid;
-		packet.username = this.username;
-		packet.runtimeId = this.runtime;
-		packet.platformChatId = String(); // TODO: Not sure what this is.
-		packet.position = this.position;
-		packet.velocity = this.velocity;
-		packet.pitch = this.rotation.pitch;
-		packet.yaw = this.rotation.yaw;
-		packet.headYaw = this.rotation.headYaw;
-		packet.heldItem =
-			heldItem === null
-				? new NetworkItemStackDescriptor(0)
-				: ItemStack.toNetworkStack(heldItem);
-		packet.gamemode = this.gamemode;
-		packet.data = [...this.metadata];
-		packet.properties = new PropertySyncData([], []);
-		packet.uniqueEntityId = this.unique;
-		packet.premissionLevel = this.permission;
-		packet.commandPermission = this.permission === 2 ? 1 : 0;
-		packet.abilities = [
-			{
-				type: AbilityLayerType.Base,
-				flags: [...this.abilities.values()],
-				flySpeed: 0.05,
-				walkSpeed: 0.1
-			}
-		];
-		packet.links = [];
-		packet.deviceId = "";
-		packet.deviceOS = 0;
-
-		// Check if the dimension has the player already
-		if (this.dimension.entities.has(this.unique)) {
-			// Send the packet to the player
-			player
-				? player.session.send(packet)
-				: this.dimension.broadcastExcept(this, packet);
-		} else {
-			// Send the packet to the player
-			player ? player.session.send(packet) : this.dimension.broadcast(packet);
-		}
-
-		// If a player was provided, then return
-		if (player) return;
+		// Set the player's status
+		this.status = PlayerStatus.Spawned;
 
 		// Add the player to the dimension
 		this.dimension.entities.set(this.unique, this);
@@ -322,8 +287,8 @@ class Player extends Entity {
 		// Trigger the onSpawn method of all applicable components
 		for (const component of this.getComponents()) component.onSpawn?.();
 
-		// Sync the player instance
-		this.sync();
+		// Sync the players data
+		return this.sync();
 	}
 
 	/**
@@ -335,8 +300,7 @@ class Player extends Entity {
 		const respawn = new RespawnPacket();
 
 		// Get the spawn position of the dimension
-		// TODO: Add a spawn position to player instance
-		const { x, y, z } = this.dimension.spawn;
+		const { x, y, z } = this.spawnPosition;
 
 		// Set the packet properties
 		respawn.position = this.position;
@@ -452,137 +416,7 @@ class Player extends Entity {
 	}
 
 	/**
-	 * Syncs the player's abilities to the dimension.
-	 */
-	public syncAbilities(): void {
-		// Create a new UpdateAbilitiesPacket
-		const packet = new UpdateAbilitiesPacket();
-		packet.permissionLevel = this.permission;
-		packet.commandPersmissionLevel = this.permission === 2 ? 1 : 0;
-		packet.entityUniqueId = this.unique;
-		packet.abilities = [
-			{
-				type: AbilityLayerType.Base,
-				flags: [...this.abilities.values()],
-				walkSpeed: 0.1,
-				flySpeed: 0.05
-			}
-		];
-
-		// Send the packet to the player
-		this.dimension.broadcast(packet);
-	}
-
-	/**
-	 * Checks if the player has a specific ability.
-	 * @param ability The ability to check.
-	 * @returns Whether the player has the ability.
-	 */
-	public hasAbility(ability: AbilityLayerFlag): boolean {
-		return [...this.abilities.values()].some((flag) => flag.flag === ability);
-	}
-
-	/**
-	 * Gets a specific ability from the player.
-	 * @param ability The ability to get.
-	 * @returns The ability that was found.
-	 */
-	public getAbility(ability: AbilityLayerFlag): AbilityFlag | undefined {
-		return [...this.abilities.values()].find((flag) => flag.flag === ability);
-	}
-
-	/**
-	 * Gets all the abilities from the player.
-	 * @returns The abilities that were found.
-	 */
-	public getAllAbilities(): Array<AbilityFlag> {
-		return [...this.abilities.values()];
-	}
-
-	/**
-	 * Adds an ability to the player.
-	 * @param ability The ability to add.
-	 * @param sync Whether to synchronize the ability to the dimension.
-	 */
-	public addAbility(ability: AbilityFlag, sync = true): void {
-		this.abilities.add(ability);
-
-		// Check if the ability should be synchronized
-		if (sync) this.syncAbilities();
-	}
-
-	/**
-	 * Sets a specific ability to the player.
-	 * @param ability The ability to set.
-	 * @param value The value to set the ability to.
-	 * @param sync Whether to synchronize the ability to the dimension.
-	 */
-	public setAbility(
-		ability: AbilityLayerFlag,
-		value: boolean,
-		sync = true
-	): void {
-		// Get the ability
-		const flag = this.getAbility(ability);
-
-		// Check if the ability was found
-		if (!flag) return;
-
-		// Set the value of the ability
-		flag.value = value;
-
-		// Check if the ability should be synchronized
-		if (sync) this.syncAbilities();
-	}
-
-	/**
-	 * Creates a new ability for the player.
-	 * @param ability The ability to create.
-	 * @param value The value to set the ability to.
-	 * @param sync Whether to synchronize the ability to the dimension.
-	 */
-	public createAbility(
-		ability: AbilityLayerFlag,
-		value: boolean,
-		sync = true
-	): void {
-		// TODO: rewrite the ability proto and types
-
-		// Create a new ability flag
-		const flag: AbilityFlag = {
-			flag: ability,
-			value
-		};
-
-		// Add the ability to the player
-		this.addAbility(flag);
-
-		// Check if the ability should be synchronized
-		if (sync) this.syncAbilities();
-	}
-
-	/**
-	 * Removes an ability from the player.
-	 * @param ability The ability to remove.
-	 * @param sync Whether to synchronize the ability to the dimension.
-	 */
-	public removeAbility(ability: AbilityLayerFlag, sync = true): void {
-		// Get the ability
-		const flag = this.getAbility(ability);
-
-		// Check if the ability was found
-		if (!flag) return;
-
-		// Remove the ability
-		this.abilities.delete(flag);
-
-		// Check if the ability should be synchronized
-		if (sync) this.syncAbilities();
-	}
-
-	/**
 	 * Sends a message to the player.
-	 *
 	 * @param message The message to send.
 	 */
 	public sendMessage(message: string): void {
@@ -604,6 +438,21 @@ class Player extends Entity {
 	}
 
 	/**
+	 * Sends a toast to the player.
+	 * @param title The title of the toast.
+	 * @param message The message of the toast.
+	 */
+	public sendToast(title: string, message: string): void {
+		// Create a new ToastRequestPacket
+		const packet = new ToastRequestPacket();
+		packet.title = title;
+		packet.message = message;
+
+		// Send the packet to the player
+		this.session.send(packet);
+	}
+
+	/**
 	 * Teleports the player to a specific position.
 	 * @param position The position to teleport the player to.
 	 * @param dimension The dimension to teleport the player to.
@@ -621,13 +470,7 @@ class Player extends Entity {
 
 			// Check if the dimension types are different
 			// This allows for a faster dimension change if the types are the same
-			if (this.dimension.type === dimension.type) {
-				// Despawn all entities in the dimension for the player
-				for (const entity of this.dimension.entities.values()) {
-					// Despawn the entity for the player
-					entity.despawn(this);
-				}
-			} else {
+			if (this.dimension.type !== dimension.type) {
 				// Create a new ChangeDimensionPacket
 				const packet = new ChangeDimensionPacket();
 				packet.dimension = dimension.type;
@@ -635,7 +478,7 @@ class Player extends Entity {
 				packet.respawn = true;
 
 				// Send the packet to the player
-				this.session.send(packet);
+				this.session.sendImmediate(packet);
 			}
 
 			// Set the new dimension
@@ -652,6 +495,9 @@ class Player extends Entity {
 
 			// Spawn the player in the new dimension
 			this.spawn();
+
+			// Update the player's position
+			return this.teleport(position);
 		} else {
 			// Create a new MovePlayerPacket
 			const packet = new MovePlayerPacket();
@@ -814,49 +660,117 @@ class Player extends Entity {
 			}
 		}
 	}
+
+	/**
+	 * Retrieves the duration for which the player has been using an item.
+	 *
+	 * @returns  The duration in ticks that the player has been using the item.
+	 *           Returns 0 if the player is not currently using an item.
+	 */
+	public getItemUseDuration(): bigint {
+		return this.startUsingTick == -1n
+			? 0n
+			: this.getWorld().currentTick - this.startUsingTick;
+	}
+
+	/**
+	 * Checks if the player has the ability.
+	 * @param ability The ability to check.
+	 * @returns If the player has the ability.
+	 */
+	public hasAbility(ability: AbilityIndex): boolean {
+		return this.abilities.has(ability);
+	}
+
+	/**
+	 * Gets the value of the ability of the player.
+	 * @param ability The ability to get.
+	 * @returns The value of the ability.
+	 */
+	public getAbility(ability: AbilityIndex): boolean {
+		return this.abilities.get(ability) ?? false;
+	}
+
+	/**
+	 * Sets the ability of the player.
+	 * @param ability The ability to set.
+	 * @param value The value to set the ability to.
+	 */
+	public setAbility(ability: AbilityIndex, value: boolean): void {
+		// Set the ability in the abilities map
+		this.abilities.set(ability, value);
+
+		// Update the player's abilities
+		this.updateAbilities();
+	}
+
+	/**
+	 * Updates the player's abilities to the dimension.
+	 */
+	public updateAbilities(): void {
+		// Create a new UpdateAbilitiesPacket
+		const packet = new UpdateAbilitiesPacket();
+		packet.permissionLevel = this.permission;
+		packet.commandPersmissionLevel = this.permission === 2 ? 1 : 0;
+		packet.entityUniqueId = this.unique;
+		packet.abilities = [
+			{
+				type: AbilityLayerType.Base,
+				abilities: [...this.abilities.entries()].map(
+					([ability, value]) => new AbilitySet(ability, value)
+				),
+				walkSpeed: 0.1,
+				flySpeed: 0.05
+			}
+		];
+
+		// Send the packet to the player
+		this.dimension.broadcast(packet);
+	}
+
+	public executeMissSwing(): void {
+		// Create a new PlayerMissSwingSignal
+		const signal = new PlayerMissSwingSignal(this);
+		const value = signal.emit();
+
+		// Check if the signal was cancelled
+		if (!value) return;
+
+		// Create a new LevelSoundEvent
+		const levelEvent = new LevelSoundEventPacket();
+
+		// Set the packet properties
+		levelEvent.event = LevelSoundEvent.AttackNoDamage;
+		levelEvent.position = this.position;
+		levelEvent.data = -1;
+		levelEvent.actorIdentifier = EntityIdentifier.Player;
+		levelEvent.isBabyMob = false;
+		levelEvent.isGlobal = false;
+
+		// Create a new ActorEvent
+		const actorEvent = new ActorEventPacket();
+
+		// Set the packet properties
+		actorEvent.actorRuntimeId = this.unique;
+		actorEvent.eventId = ActorEventIds.ARM_SWING;
+		actorEvent.eventData = 0;
+
+		// Send packet to player
+		this.session.send(levelEvent, actorEvent);
+	}
+
+	/**
+	 * Plays an effect animation to the player.
+	 * @param effect The effect to play.
+	 */
+	public playEffectAnimation(effect: EffectType): void {
+		// Create a new OnScreenTextureAnimationPacket
+		const packet = new OnScreenTextureAnimationPacket();
+		packet.effectId = effect;
+
+		// Send the packet to the player
+		this.session.send(packet);
+	}
 }
 
 export { Player };
-
-// Register the player components
-// TODO: Move this to a separate file.
-const type = EntityType.get(EntityIdentifier.Player) as EntityType;
-PlayerCursorComponent.register(type);
-PlayerCraftingInputComponent.register(type);
-EntityInventoryComponent.register(type);
-EntityMovementComponent.register(type);
-EntityHasGravityComponent.register(type);
-EntityBreathingComponent.register(type);
-EntityNametagComponent.register(type);
-EntityAlwaysShowNametagComponent.register(type);
-EntityHealthComponent.register(type);
-EntityArmorComponent.register(type);
-EntitySkinIDComponent.register(type);
-PlayerBuildComponent.register(type);
-PlayerMineComponent.register(type);
-PlayerSaturationComponent.register(type);
-PlayerExhaustionComponent.register(type);
-PlayerHungerComponent.register(type);
-PlayerDoorsAndSwitchesComponent.register(type);
-PlayerOpenContainersComponent.register(type);
-PlayerAttackPlayersComponent.register(type);
-PlayerAttackMobsComponent.register(type);
-PlayerOperatorCommandsComponent.register(type);
-PlayerTeleportComponent.register(type);
-PlayerInvulnerableComponent.register(type);
-PlayerFlyingComponent.register(type);
-PlayerMayFlyComponent.register(type);
-PlayerInstantBuildComponent.register(type);
-PlayerLightningComponent.register(type);
-PlayerFlySpeedComponent.register(type);
-PlayerWalkSpeedComponent.register(type);
-PlayerMutedComponent.register(type);
-PlayerWorldBuilderComponent.register(type);
-PlayerNoClipComponent.register(type);
-PlayerPrivilegedBuilderComponent.register(type);
-PlayerCountComponent.register(type);
-PlayerChunkRenderingComponent.register(type);
-PlayerEntityRenderingComponent.register(type);
-PlayerExperienceLevelComponent.register(type);
-PlayerExperienceComponent.register(type);
-PlayerAbsorptionComponent.register(type);

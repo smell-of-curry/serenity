@@ -95,12 +95,30 @@ import { ServerboundLoadingScreenPacketPacket } from "./server-bound-loading-scr
 import { CameraShakePacket } from "./camera-shake";
 import { BookEditPacket } from "./book-edit";
 import { PlayerStartItemCooldownPacket } from "./player-start-item-cooldown";
+import { CameraPresetsPacket } from "./camera-presets";
+import { CameraInstructionsPacket } from "./camera-instructions";
 import { CraftingDataPacket } from "./crafting-data";
+import { SpawnParticleEffectPacket } from "./spawn-particle-effect";
+import { ContainerSetDataPacket } from "./container-set-data";
+import { AvailableActorIdentifiersPacket } from "./available-actor-identifiers";
+import { StructureBlockUpdatePacket } from "./structure-block-update";
+import { DimensionDataPacket } from "./dimension-data";
+import { PlayerEnchantOptionsPacket } from "./player-enchant-options";
+import { ClientToServerHandshakePacket } from "./client-to-server-handshake";
+import { MobArmorEquipmentPacket } from "./mob-armor-equipment";
+import { RiderJumpPacket } from "./rider-jump";
+import { BlockEventPacket } from "./block-event";
+import { EntityPickRequestPacket } from "./entity-pick-request";
+import { HurtArmorPacket } from "./hurt-armor";
+import { ShowCreditsPacket } from "./show-credits";
+import { UpdateClientInputLocksPacket } from "./update-client-input-locks";
+import { OnScreenTextureAnimationPacket } from "./on-screen-texture-animation";
 
 const Packets = {
 	[Packet.Login]: LoginPacket, // 1
 	[Packet.PlayStatus]: PlayStatusPacket, // 2
 	[Packet.ServerToClientHandshake]: ServerToClientHandshakePacket, // 3
+	[Packet.ClientToServerHandshake]: ClientToServerHandshakePacket, // 4
 	[Packet.Disconnect]: DisconnectPacket, // 5
 	[Packet.ResourcePacksInfo]: ResourcePacksInfoPacket, // 6
 	[Packet.ResourcePackStack]: ResourcePackStackPacket, // 7
@@ -115,16 +133,21 @@ const Packets = {
 	[Packet.TakeItemActor]: TakeItemActorPacket, // 17
 	[Packet.MoveActorAbsolute]: MoveActorAbsolutePacket, // 18
 	[Packet.MovePlayer]: MovePlayerPacket, // 19
+	[Packet.RiderJump]: RiderJumpPacket, // 20
 	[Packet.UpdateBlock]: UpdateBlockPacket, // 21
 	[Packet.LevelEvent]: LevelEventPacket, // 25
+	[Packet.BlockEvent]: BlockEventPacket, // 26
 	[Packet.ActorEvent]: ActorEventPacket, // 27
 	[Packet.MobEffect]: MobEffectPacket,
 	[Packet.UpdateAttributes]: UpdateAttributesPacket, // 29
 	[Packet.InventoryTransaction]: InventoryTransactionPacket, // 30
 	[Packet.MobEquipment]: MobEquipmentPacket, // 31
+	[Packet.MobArmorEquipment]: MobArmorEquipmentPacket, // 32
 	[Packet.Interact]: InteractPacket, // 33
 	[Packet.BlockPickRequest]: BlockPickRequestPacket, // 34
+	[Packet.EntityPickRequest]: EntityPickRequestPacket, // 35
 	[Packet.PlayerAction]: PlayerActionPacket, // 36
+	[Packet.HurtArmor]: HurtArmorPacket, // 38
 	[Packet.SetActorData]: SetActorDataPacket, // 39
 	[Packet.SetActorMotion]: SetActorMotionPacket, // 40
 	[Packet.Animate]: AnimatePacket, // 44
@@ -134,6 +157,7 @@ const Packets = {
 	[Packet.PlayerHotbar]: PlayerHotbarPacket, // 48
 	[Packet.InventoryContent]: InventoryContentPacket, // 49
 	[Packet.InventorySlot]: InventorySlotPacket, // 50
+	[Packet.ContainerSetData]: ContainerSetDataPacket, // 51
 	[Packet.CraftingData]: CraftingDataPacket, // 52
 	[Packet.BlockActorData]: BlockActorDataPacket, // 56
 	[Packet.LevelChunk]: LevelChunkPacket, // 58
@@ -143,6 +167,7 @@ const Packets = {
 	[Packet.PlayerList]: PlayerListPacket, // 63
 	[Packet.RequestChunkRadius]: RequestChunkRadiusPacket, // 69
 	[Packet.ChunkRadiusUpdate]: ChunkRadiusUpdatePacket, // 70
+	[Packet.ShowCredits]: ShowCreditsPacket, // 75
 	[Packet.BossEvent]: BossEventPacket, // 74
 	[Packet.AvailableCommands]: AvailableCommandsPacket, // 76
 	[Packet.CommandRequest]: CommandRequestPacket, // 77
@@ -152,6 +177,7 @@ const Packets = {
 	[Packet.ResourcePackChunkRequest]: ResourcePackChunkRequestPacket, // 84
 	[Packet.Transfer]: TransferPacket, // 85
 	[Packet.SetTitle]: SetTitlePacket, // 88
+	[Packet.StructureBlockUpdate]: StructureBlockUpdatePacket, // 90
 	[Packet.PlayerSkin]: PlayerSkinPacket, // 93
 	[Packet.BookEdit]: BookEditPacket, // 97
 	[Packet.NpcRequest]: NpcRequestPacket, // 98
@@ -163,14 +189,18 @@ const Packets = {
 	[Packet.SetScoreboardIdentity]: SetScoreboardIdentityPacket, // 112
 	[Packet.SetLocalPlayerAsInitialized]: SetLocalPlayerAsInitializedPacket, // 113
 	[Packet.NetworkStackLatency]: NetworkStackLatencyPacket, // 115
+	[Packet.SpawnParticleEffect]: SpawnParticleEffectPacket, // 118
+	[Packet.AvailableActorIdentifiers]: AvailableActorIdentifiersPacket, // 119
 	[Packet.NetworkChunkPublisherUpdate]: NetworkChunkPublisherUpdatePacket, // 121
 	[Packet.BiomeDefinitionList]: BiomeDefinitionListPacket, // 122
 	[Packet.LevelSoundEvent]: LevelSoundEventPacket, // 123
+	[Packet.OnScreenTextureAnimation]: OnScreenTextureAnimationPacket, // 130
 	[Packet.Emote]: EmotePacket, // 138
 	[Packet.CompletedUsingItem]: CompletedUsingItemPacket, // 142
 	[Packet.NetworkSettings]: NetworkSettingsPacket, // 143
 	[Packet.PlayerAuthInput]: PlayerAuthInputPacket, // 144
 	[Packet.CreativeContent]: CreativeContentPacket, // 145
+	[Packet.PlayerEnchantOptions]: PlayerEnchantOptionsPacket, // 146
 	[Packet.ItemStackRequest]: ItemStackRequestPacket, // 147
 	[Packet.ItemStackResponse]: ItemStackResponsePacket, // 148
 	[Packet.EmoteList]: EmoteListPacket, // 152
@@ -181,11 +211,15 @@ const Packets = {
 	[Packet.NpcDialogue]: NpcDialoguePacket, // 169
 	[Packet.PlayerStartItemCooldown]: PlayerStartItemCooldownPacket, // 176
 	[Packet.ScriptMessage]: ScriptMessagePacket, // 177
+	[Packet.DimensionData]: DimensionDataPacket, // 180
 	[Packet.ToastRequest]: ToastRequestPacket, // 186
 	[Packet.UpdateAbilities]: UpdateAbilitiesPacket, // 187
 	[Packet.UpdateAdventureSettings]: UpdateAdventureSettingsPacket, // 188
 	[Packet.DeathInfo]: DeathInfoPacket, // 189
 	[Packet.RequestNetworkSettings]: RequestNetworkSettingsPacket, // 193
+	[Packet.UpdateClientInputLocks]: UpdateClientInputLocksPacket, // 196
+	[Packet.CameraPresetsPacket]: CameraPresetsPacket, // 198
+	[Packet.CameraInstructions]: CameraInstructionsPacket, // 300
 	[Packet.OpenSign]: OpenSignPacket, // 303
 	[Packet.SetPlayerInventoryOptions]: SetPlayerInventoryOptionsPacket, // 307
 	[Packet.SetHud]: SetHudPacket, // 308

@@ -1,8 +1,5 @@
-import {
-	CommandPermissionLevel,
-	CommandRequestPacket,
-	PermissionLevel
-} from "@serenityjs/protocol";
+import { CommandRequestPacket } from "@serenityjs/protocol";
+import { PlayerExecuteCommandSignal } from "@serenityjs/world";
 import { CommandExecutionState } from "@serenityjs/command";
 
 import { SerenityHandler } from "./serenity-handler";
@@ -21,39 +18,43 @@ class CommandRequest extends SerenityHandler {
 		const player = this.serenity.getPlayer(session);
 		if (!player) return;
 
-		// Get the command from the packet
+		// Create a new PlayerExecuteCommandSignal instance.
+		const signal = new PlayerExecuteCommandSignal(player, packet.command);
+		const value = signal.emit();
+
+		// If the signal was cancelled, return.
+		if (value === false) return;
+
+		// Get the world from the player
+		const world = player.dimension.world;
+
+		// Reassign the command to the signal's command.
+		packet.command = signal.command;
+
+		// Filter the command
+		const name = packet.command.startsWith("/")
+			? packet.command.slice(1)
+			: packet.command;
+
+		// Create a new CommandExecutionState instance
 		const state = new CommandExecutionState(
-			player.dimension.world.commands,
-			packet.command,
+			world.commands.getAll(),
+			name,
 			player
 		);
 
-		// Convert the player permission level to a command permission level
-		const permission =
-			player.permission === PermissionLevel.Operator
-				? CommandPermissionLevel.Operator
-				: CommandPermissionLevel.Normal;
+		// Check if the player has the required permission to execute the command
+		if ((state.command?.registry.permissionLevel ?? 4) > player.permission)
+			return player.sendMessage(
+				`§cYou do not have permission to execute this command.`
+			);
 
-		// Check if the player has the required permission level
-		if (
-			state.command?.permission && // Check if the player has the required permission level
-			permission < state.command.permission
-		) {
-			// Send a message to the player
-			player.sendMessage(`§cYou do not have permission to use this command.§r`);
-
-			// Return
-			return;
-		}
-
-		// Try to execute the command
 		try {
-			// Execute the command
+			// Try to execute the command
 			const result = state.execute();
-			if (!result) return;
 
 			// Log the command to the console
-			player.dimension.world.logger.info(
+			world.logger.info(
 				`§8[§9${player.username}§8] Command:§r ${packet.command}`
 			);
 

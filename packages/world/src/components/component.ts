@@ -40,7 +40,7 @@ class Component {
 	/**
 	 * Called when the component is ticked.
 	 */
-	public onTick?(): void;
+	public onTick?(deltaTick: number): void;
 
 	/**
 	 * Binds the component to the specified types.
@@ -50,21 +50,26 @@ class Component {
 	}
 
 	/**
-	 * Compresses the component into a compound tag.
-	 * @param component The component to compress.
-	 * @returns The compressed component.
+	 * Serializes the component.
+	 * @param nbt The NBT tag to serialize to.
+	 * @param component The component to serialize.
+	 * @returns The serialized component.
 	 */
-	public static compress(_component: Component): CompoundTag {
-		throw new Error("Method not implemented.");
+	public static serialize(_nbt: CompoundTag, _component: Component): void {
+		return;
 	}
 
 	/**
-	 * Decompresses the component from a compound tag.
-	 * @param tag The tag to decompress.
-	 * @returns The decompressed component.
+	 * Deserializes the component.
+	 * @param nbt The NBT tag to deserialize from.
+	 * @param unknown Unknown arguments.
+	 * @returns The deserialized component.
 	 */
-	public static decompress(..._parameters: Array<unknown>): Component {
-		throw new Error("Method not implemented.");
+	public static deserialize(
+		_nbt: CompoundTag,
+		..._unknown: Array<unknown>
+	): Component {
+		return new this(this.identifier);
 	}
 }
 

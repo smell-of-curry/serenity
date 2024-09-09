@@ -8,35 +8,25 @@ const register = (world: World, serenity: Serenity) => {
 	world.commands.register(
 		"stop",
 		"Shuts down the server (console only)",
-		(origin) => {
+		(registry) => {
+			// Set the command to be an internal command
+			registry.permissionLevel = CommandPermissionLevel.Internal;
+		},
+		(context) => {
 			// Check if the origin is a player
-			if (origin instanceof Player) {
-				origin.sendMessage(
+			if (context.origin instanceof Player) {
+				context.origin.sendMessage(
 					"§cThis command can only be executed from the console§r"
 				);
 				return;
 			} else {
 				// Stop the server
-				serenity
-					.stop()
-					.then(() => {
-						// eslint-disable-next-line unicorn/no-process-exit
-						process.nextTick(() => process.exit(0));
-
-						return;
-					})
-					.catch(() => {
-						return;
-					});
+				void serenity.stop();
 
 				return {
 					message: "§aServer is shutting down...§r"
 				};
 			}
-		},
-		{},
-		{
-			permission: CommandPermissionLevel.Internal
 		}
 	);
 };

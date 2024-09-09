@@ -6,12 +6,20 @@ import {
 	Overworld,
 	Superflat,
 	Void,
+	World,
+	type WorldConfig,
 	type TerrainGenerator,
-	type World,
-	type WorldProvider
+	type WorldProvider,
+	WorldInitializeSignal,
+	type WorldEventSignals
 } from "@serenityjs/world";
 import { Logger, LoggerColors } from "@serenityjs/logger";
-import { DisconnectPacket, DisconnectReason } from "@serenityjs/protocol";
+import {
+	DisconnectMessage,
+	DisconnectPacket,
+	DisconnectReason
+} from "@serenityjs/protocol";
+import Emitter from "@serenityjs/emitter";
 
 import { FileSystemProvider, LevelDBProvider } from "../providers";
 import { exists } from "../utils/exists";
@@ -23,7 +31,7 @@ import type { Serenity } from "../serenity";
 // This way, we could have more structured data and it would be easier to read and write.
 // This would also allow to add comfiguration options to the provider.
 
-class Worlds {
+class Worlds extends Emitter<WorldEventSignals> {
 	/**
 	 * The serenity instance.
 	 */
@@ -61,6 +69,7 @@ class Worlds {
 	 * @returns A new worlds manager.
 	 */
 	public constructor(serenity: Serenity) {
+		super();
 		this.serenity = serenity;
 		this.path = resolve(
 			process.cwd(),
@@ -100,20 +109,39 @@ class Worlds {
 		// If the worlds directory is empty, then create the default world.
 		if (directories.length === 0) {
 			// Get the default world name.
-			const defaultName = this.serenity.properties.getValue("worlds-default");
+			const identifier = this.serenity.properties.getValue("worlds-default");
 
 			// Create a "default" directory in the worlds directory.
-			await mkdirSync(resolve(this.path, defaultName));
+			await mkdirSync(resolve(this.path, identifier));
 
 			// Create a ".provider" file in the "default" directory.
 			const provider = this.serenity.properties.getValue(
 				"worlds-default-provider"
 			);
 
-			// Write the provider to the ".provider" file.
+			const generator =
+				this.serenity.properties.getValue("worlds-default-generator") ||
+				"overworld";
+
+			// Create the default world configuration.
+			const config: WorldConfig = {
+				identifier,
+				provider,
+				seed: Math.floor(Math.random() * 1_000_000),
+				dimensions: [
+					{
+						identifier: "overworld",
+						type: "overworld",
+						generator: generator,
+						spawn: [0, 120, 0]
+					}
+				]
+			};
+
+			// Write the provider to the "config.json" file.
 			await writeFileSync(
-				resolve(this.path, defaultName, ".provider"),
-				provider
+				resolve(this.path, identifier, "config.json"),
+				JSON.stringify(config, null, 2)
 			);
 		}
 	}
@@ -129,27 +157,39 @@ class Worlds {
 		);
 
 		// Loop through the directories in the worlds directory.
-		// And check if the directory container a .provider file.
+		// And check if the directory container a config.json file.
 		for await (const directory of directories) {
 			if (
-				exists(resolve(this.path, directory.path, directory.name, ".provider"))
+				exists(
+					resolve(this.path, directory.path, directory.name, "config.json")
+				)
 			) {
 				// Get the path of the world
 				const path = resolve(this.path, directory.path, directory.name);
 
-				// Read the .provider file.
-				const entry = readFileSync(resolve(path, ".provider"), "utf8");
+				// Read the config.json file.
+				const entry = readFileSync(resolve(path, "config.json"), "utf8");
+
+				// Parse the config.json file.
+				const config = JSON.parse(entry) as WorldConfig;
 
 				// Get the provider class instance.
-				const provider = this.getProvider(entry);
+				const provider = this.getProvider(config.provider);
 
 				// Check if the provider is not undefined.
 				if (provider) {
 					// Initialize the world with the provider.
 					const world = provider.initialize(
+						config,
 						resolve(this.path, directory.path, directory.name),
 						[...this.generators.values()]
 					);
+
+					// Set the emitter of the world to this emitter.
+					world.emitter = this;
+
+					// Create a new WorldInitializeSignal and emit it.
+					new WorldInitializeSignal(world).emit();
 
 					// Register the admin commands.
 					for (const command of ADMIN_COMMANDS) {
@@ -201,7 +241,7 @@ class Worlds {
 
 			// Create a new DisconnectPacket.
 			const packet = new DisconnectPacket();
-			packet.message = message;
+			packet.message = new DisconnectMessage(message, message);
 			packet.hideDisconnectScreen = false;
 			packet.reason = DisconnectReason.Shutdown;
 
@@ -237,6 +277,27 @@ class Worlds {
 	 */
 	public register(world: World): void {
 		this.entries.set(world.identifier, world);
+	}
+
+	/**
+	 * Create a new world with the given identifier and provider.
+	 * @param identifier The identifier of the world.
+	 * @param provider The provider of the world.
+	 * @returns The created world.
+	 */
+	public create(identifier: string, provider: WorldProvider): World {
+		// Check if the world identifier already exists.
+		if (this.entries.has(identifier))
+			throw new Error(`World "${identifier}" already exists.`);
+
+		// Create a new world with the given identifier and provider.
+		const world = new World(identifier, provider, this);
+
+		// Register the world to the manager.
+		this.register(world);
+
+		// Return the created world.
+		return world;
 	}
 
 	/**

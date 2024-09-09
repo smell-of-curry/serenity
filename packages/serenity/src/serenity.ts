@@ -1,18 +1,12 @@
 import { Logger, LoggerColors } from "@serenityjs/logger";
 import { Server } from "@serenityjs/raknet";
 import { Network, type NetworkSession } from "@serenityjs/network";
-import Emitter from "@serenityjs/emitter";
 import { Plugins } from "@serenityjs/plugins";
+import { WorldEvent, type Player } from "@serenityjs/world";
 
 import { SerenityHandler, HANDLERS } from "./handlers";
 import { Properties } from "./properties";
 import { ResourcePackManager } from "./resource-packs/resource-pack-manager";
-import {
-	EVENT_SIGNALS,
-	EventPriority,
-	type EventSignal,
-	type EventSignals
-} from "./events";
 import { Worlds } from "./worlds";
 import { DEFAULT_SERVER_PROPERTIES } from "./properties/default";
 import { Permissions } from "./permissions";
@@ -20,9 +14,8 @@ import { Console } from "./commands";
 
 import type { DataPacket } from "@serenityjs/protocol";
 import type { DefaultServerProperties } from "./types";
-import type { Player } from "@serenityjs/world";
 
-class Serenity extends Emitter<EventSignals> {
+class Serenity {
 	/**
 	 * The server logger instance
 	 */
@@ -64,11 +57,6 @@ class Serenity extends Emitter<EventSignals> {
 	public readonly resourcePacks: ResourcePackManager;
 
 	/**
-	 * A collective registry of all events.
-	 */
-	public readonly events: Map<string, EventSignal>;
-
-	/**
 	 * The plugins manager instance
 	 */
 	public readonly plugins: Plugins;
@@ -82,9 +70,9 @@ class Serenity extends Emitter<EventSignals> {
 		new Map();
 
 	/**
-	 * The server tick interval
+	 * Whether the server is stopped
 	 */
-	public interval: NodeJS.Timeout | null = null;
+	public stopped = false;
 
 	/**
 	 * The server ticks
@@ -99,8 +87,6 @@ class Serenity extends Emitter<EventSignals> {
 	public tps: number = 20;
 
 	public constructor() {
-		super();
-
 		// Assign instances
 		this.logger = new Logger("Serenity", LoggerColors.Magenta);
 		this.properties = new Properties(
@@ -140,7 +126,6 @@ class Serenity extends Emitter<EventSignals> {
 		);
 
 		this.players = new Map();
-		this.events = new Map();
 
 		this.resourcePacks = new ResourcePackManager(
 			"./resource_packs",
@@ -150,49 +135,6 @@ class Serenity extends Emitter<EventSignals> {
 
 		// Set the Serenity instance for all handlers and event signals
 		SerenityHandler.serenity = this;
-
-		// Load all the event signals
-		for (const signal of EVENT_SIGNALS) {
-			// Apply the event signal priority
-			// This will corrispond to the incoming packet priority
-			switch (signal.priority as EventPriority) {
-				default: {
-					// If no priority is set, check if the signal has a hook
-					// If so we will set the priority to "During"
-					if (signal.hook) {
-						this.network.on(signal.hook, signal.logic.bind(signal) as never);
-					}
-					break;
-				}
-
-				case EventPriority.Before: {
-					// If the priority is set to "Before"
-					// We will bind the signal logic to the network event before it is handled
-					this.network.before(signal.hook, signal.logic.bind(signal) as never);
-					break;
-				}
-
-				case EventPriority.After: {
-					// If the priority is set to "After"
-					// We will bind the signal logic to the network event after it is handled
-					this.network.after(signal.hook, signal.logic.bind(signal) as never);
-					break;
-				}
-
-				case EventPriority.During: {
-					// If the priority is set to "During"
-					// We will bind the signal logic to the network event
-					this.network.on(signal.hook, signal.logic.bind(signal) as never);
-					break;
-				}
-			}
-
-			// Set the Serenity instance for the event signal
-			signal.serenity = this;
-
-			// Set the signal in the events map
-			this.events.set(signal.name, signal);
-		}
 
 		// Register the worlds manager
 		this.worlds = new Worlds(this);
@@ -208,6 +150,9 @@ class Serenity extends Emitter<EventSignals> {
 	}
 
 	public async start(): Promise<void> {
+		// Set the server to not stopped
+		this.stopped = false;
+
 		// Initialize the worlds
 		await this.worlds.initialize();
 		await this.plugins.initialize(this);
@@ -215,53 +160,106 @@ class Serenity extends Emitter<EventSignals> {
 		// Start the raknet instance.
 		this.raknet.start();
 
+		// Iterate over all the plugins to bind the exported event handlers
+		for (const plugin of this.plugins.getAll()) {
+			// Check if the module has the event handlers
+			const keys = Object.keys(plugin.module);
+
+			// Get all the world events
+			const events = Object.keys(WorldEvent);
+
+			// Iterate over all the events
+			for (const event of events) {
+				// Check for "on" event hooks
+				if (keys.includes("on" + event)) {
+					// Get the value of the event
+					const value = WorldEvent[event as keyof typeof WorldEvent];
+
+					// Get the handler from the plugin module
+					const handler = (plugin.module as Record<string, unknown>)[
+						"on" + event
+					] as () => void;
+
+					// Bind the handler to the plugin
+					this.worlds.on(value, handler.bind(this));
+				}
+
+				// Check for "before" event hooks
+				if (keys.includes("before" + event)) {
+					// Get the value of the event
+					const value = WorldEvent[event as keyof typeof WorldEvent];
+
+					// Get the handler from the plugin module
+					const handler = (plugin.module as Record<string, unknown>)[
+						"before" + event
+					] as () => boolean;
+
+					// Bind the handler to the plugin
+					this.worlds.before(value, handler.bind(this));
+				}
+
+				// Check for "after" event hooks
+				if (keys.includes("after" + event)) {
+					// Get the value of the event
+					const value = WorldEvent[event as keyof typeof WorldEvent];
+
+					// Get the handler from the plugin module
+					const handler = (plugin.module as Record<string, unknown>)[
+						"after" + event
+					] as () => void;
+
+					// Bind the handler to the plugin
+					this.worlds.after(value, handler.bind(this));
+				}
+			}
+		}
+
 		// Get the server tps from the properties
 		const tps = this.properties.getValue("server-tps") ?? 20;
 
+		let lastTick = process.hrtime();
+
 		// Create a ticking loop with default 50ms interval
 		// Handle delta time and tick the world
-		const tick = () =>
-			setTimeout(
-				() => {
-					// Assign the current time to the now variable
-					const now = Date.now();
+		const tick = () => {
+			// Check if the server is stopped
+			if (this.stopped) return;
 
-					// Push the current time to the ticks array
-					this.ticks.push(now);
+			// Get the current time
+			const [seconds, nanoseconds] = process.hrtime(lastTick);
+			const delta = seconds + nanoseconds / 1e9;
 
-					// Calculate the ticking threshold
-					// Filter the ticks array to remove all ticks older than 1000ms
-					const threshold = now - 1000;
-					this.ticks = this.ticks.filter((tick) => tick > threshold);
+			// Check if the server should tick
+			if (delta >= 1 / tps) {
+				// Set the last tick to the current time
+				lastTick = process.hrtime();
 
-					// Calculate the TPS
-					this.tps = this.ticks.length;
+				// Calculate the delta time
+				const deltaTick = delta * 1000;
 
-					// Tick all the worlds
-					for (const world of this.worlds.getAll()) world.tick();
+				// Calculate the server tps
+				this.ticks.push(Date.now());
+				const threshold = Date.now() - 1000;
+				this.ticks = this.ticks.filter((tick) => tick > threshold);
+				this.tps = this.ticks.length;
 
-					// Increment the tick
-					this.tick++;
+				// Tick all the worlds
+				for (const world of this.worlds.getAll())
+					world.tick(Math.floor(deltaTick));
 
-					// TODO: ??? Maybe find a better solution?
-					if (this.tick % 100 === 0 && this.connecting.size > 0) {
-						for (const [session, packets] of this.connecting) {
-							session.sendImmediate(...packets);
-						}
-					}
+				// Increment the tick
+				this.tick++;
+			}
 
-					// Tick the server
-					tick();
-				},
-				1000 / tps - 10
-			);
-
-		// Start the ticking loop
-		this.interval = tick().unref();
+			setImmediate(tick);
+		};
 
 		// Start the worlds
 		await this.worlds.start();
 		await this.plugins.start(this);
+
+		// Set the interval to the tick method
+		tick();
 
 		this.logger.info(
 			`Serenity is now up and running on ${this.raknet.address}:${this.raknet.port}`
@@ -272,12 +270,15 @@ class Serenity extends Emitter<EventSignals> {
 	 * Stops the server and all the plugins.
 	 */
 	public async stop(): Promise<void> {
+		// Close the console interface
+		this.console.interface.close();
+
 		// Stop all the plugins & worlds
 		await this.plugins.stop(this);
 		await this.worlds.stop();
 
-		// Clear the ticking interval
-		if (this.interval) clearInterval(this.interval);
+		// Stop the server
+		this.stopped = true;
 
 		// Stop the raknet instance
 		process.nextTick(() => {

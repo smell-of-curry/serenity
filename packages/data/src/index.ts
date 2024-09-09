@@ -30,11 +30,24 @@ interface ItemTypes {
 	identifier: string;
 	stackable: boolean;
 	maxAmount: number;
+	tags: Array<string>;
 }
 
 interface EntityTypes {
 	identifier: string;
 	components: Array<string>;
+}
+
+interface BlockDrop {
+	identifier: string;
+	min: number;
+	max: number;
+	chance: number;
+}
+
+interface BlockDrops {
+	identifier: string;
+	drops: Array<BlockDrop>;
 }
 
 /**
@@ -56,6 +69,13 @@ const BLOCK_TYPES: Array<BlockTypes> = JSON.parse(
  */
 const BLOCK_PERMUTATIONS: Array<BlockPermutations> = JSON.parse(
 	readFileSync(resolve(data, "block_permutations.json"), "utf8")
+);
+
+/**
+ * Block drops for all blocks in the game.
+ */
+const BLOCK_DROPS: Array<BlockDrops> = JSON.parse(
+	readFileSync(resolve(data, "block_drops.json"), "utf8")
 );
 
 /**
@@ -96,14 +116,18 @@ const CREATIVE_CONTENT = readFileSync(resolve(data, "creative_content.bin"));
  */
 const ITEMDATA = readFileSync(resolve(data, "itemdata.bin"));
 
+const CRAFTING_DATA = readFileSync(resolve(data, "crafting_data.bin"));
+
 export {
 	BLOCK_STATES,
 	BLOCK_TYPES,
 	BLOCK_PERMUTATIONS,
+	BLOCK_DROPS,
 	ITEM_TYPES,
 	ENTITY_TYPES,
 	CANONICAL_BLOCK_STATES,
 	BIOME_DEFINITION_LIST,
 	CREATIVE_CONTENT,
-	ITEMDATA
+	ITEMDATA,
+	CRAFTING_DATA
 };

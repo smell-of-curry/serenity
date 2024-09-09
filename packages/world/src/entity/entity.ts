@@ -1,15 +1,13 @@
 import {
+	ActorData,
 	ActorEventIds,
 	ActorEventPacket,
-	AddEntityPacket,
-	AddItemActorPacket,
 	Attribute,
 	type AttributeName,
 	ChunkCoords,
 	ContainerName,
 	type EffectType,
 	MoveActorAbsolutePacket,
-	RemoveEntityPacket,
 	Rotation,
 	SetActorMotionPacket,
 	SetActorDataPacket,
@@ -22,24 +20,45 @@ import {
 	ActorDataId
 } from "@serenityjs/protocol";
 import { EntityIdentifier, EntityType } from "@serenityjs/entity";
-import { CommandExecutionState, type CommandResult } from "@serenityjs/command";
+import {
+	CommandExecutionState,
+	type CommandResponse
+} from "@serenityjs/command";
+import {
+	CompoundTag,
+	FloatTag,
+	ListTag,
+	LongTag,
+	StringTag,
+	Tag
+} from "@serenityjs/nbt";
 
-import { CardinalDirection } from "../enums";
+import { CardinalDirection, type EntityInteractType } from "../enums";
 import {
 	EntityAlwaysShowNametagComponent,
 	EntityComponent,
 	EntityEffectsComponent,
 	EntityHealthComponent,
+	EntityIsVisibleComponent,
 	EntityNametagComponent,
 	EntityOnFireComponent,
 	EntityVariantComponent
 } from "../components";
-import { ItemStack } from "../item";
+import {
+	EntityDespawnedSignal,
+	EntityDieSignal,
+	EntitySpawnedSignal,
+	EntityTeleportSignal,
+	PlayerInteractWithEntitySignal
+} from "../events";
+import { ScoreboardIdentity } from "../scoreboard";
+import { Player, type PlayerOptions } from "../player";
+import { Raycaster } from "../collisions";
 
+import type { BlockHitResult } from "../types";
 import type { Container } from "../container";
 import type { Effect } from "../effect/effect";
 import type { Chunk } from "../chunk";
-import type { Player } from "../player";
 import type { Dimension, World } from "../world";
 import type { EntityComponents } from "../types/components";
 
@@ -103,6 +122,11 @@ class Entity {
 	public readonly rotation = new Rotation(0, 0, 0);
 
 	/**
+	 * The tags of the entity.
+	 */
+	public readonly tags = new Array<string>();
+
+	/**
 	 * The components of the entity.
 	 */
 	public readonly components = new Map<string, EntityComponent>();
@@ -123,9 +147,19 @@ class Entity {
 	public readonly attributes = new Set<Attribute>();
 
 	/**
+	 * The scoreboard identity of the entity.
+	 */
+	public readonly scoreboardIdentity: ScoreboardIdentity;
+
+	/**
 	 * The dimension of the entity.
 	 */
 	public dimension: Dimension;
+
+	/**
+	 * The nbt data of the entity.
+	 */
+	public nbt = new CompoundTag();
 
 	/**
 	 * Whether or not the entity is on the ground.
@@ -137,6 +171,11 @@ class Entity {
 	 */
 	public isAlive = true;
 
+	/**
+	 * Whether or not the entity is swimming.
+	 */
+	public isSwimming = false;
+
 	public constructor(
 		identifier: EntityIdentifier,
 		dimension: Dimension,
@@ -145,14 +184,13 @@ class Entity {
 		// Readonly properties
 		this.type = EntityType.get(identifier) as EntityType;
 		this.runtime = Entity.runtime++;
-		this.unique = uniqueId
-			? uniqueId < 0n
-				? -uniqueId >> 32n
-				: uniqueId >> 32n
-			: Entity.runtime;
+		this.unique = uniqueId ?? BigInt(-Date.now() >> 4) + this.runtime;
 
 		// Mutable properties
 		this.dimension = dimension;
+
+		// Create the scoreboard identity
+		this.scoreboardIdentity = new ScoreboardIdentity(this);
 
 		// Check if the entity is a player
 		if (this.type.identifier === EntityIdentifier.Player) return;
@@ -167,7 +205,7 @@ class Entity {
 	 */
 	public sync(): void {
 		// Syncs the entity data
-		this.syncData();
+		this.updateActorData();
 
 		// Syncs the entity attributes
 		this.syncAttributes();
@@ -257,38 +295,33 @@ class Entity {
 	/**
 	 * Executes a command on the entity.
 	 * @param command The command to execute.
-	 * @returns The result of the command.
+	 * @returns Whether or not the command was executed.
 	 */
-	public executeCommand(command: string): CommandResult | undefined {
-		// Check if the command doesnt start with /
-		// If so, add it
-		if (!command.startsWith("/")) command = `/${command}`;
+	public executeCommand<T = unknown>(
+		command: string
+	): CommandResponse<T> | null {
+		// Check if the command starts with a slash, remove it if it does not
+		if (command.startsWith("/")) command = command.slice(1);
 
 		// Create a new command execute state
 		const state = new CommandExecutionState(
-			this.dimension.world.commands,
+			this.dimension.world.commands.getAll(),
 			command,
 			this
 		);
 
-		// Try and execute the command
 		try {
-			// Return the result of the command
-			return state.execute();
+			// Execute the command state
+			return state.execute() as CommandResponse<T>;
 		} catch (reason) {
-			// Check if the entity is a player
-			if (this.isPlayer()) {
-				this.dimension.world.logger.error(
-					`Failed to execute command '${command}' for player '${this.username}':`,
-					reason
-				);
-			} else {
-				// Log the error to the console
-				this.dimension.world.logger.error(
-					`Failed to execute command '${command}' for ${this.type.identifier} entity '${this.unique}':`,
-					reason
-				);
-			}
+			// Log the error
+			this.dimension.world.logger.error(
+				`Failed to execute command as entity "${this.unique}".`,
+				reason
+			);
+
+			// Return null
+			return null;
 		}
 	}
 
@@ -296,48 +329,13 @@ class Entity {
 	 * Spawns the entity in the world.
 	 * @param player The player to spawn the entity to.
 	 */
-	public spawn(player?: Player): void {
-		// Check if the entity is an item
-		if (this.isItem()) {
-			// Get the item component
-			const itemComponent = this.getComponent("minecraft:item");
+	public spawn(): void {
+		// Create a new EntitySpawnedSignal
+		const signal = new EntitySpawnedSignal(this, this.dimension);
+		const value = signal.emit();
 
-			// Create a new AddItemActorPacket
-			const packet = new AddItemActorPacket();
-
-			// Set the packet properties
-			packet.uniqueId = this.unique;
-			packet.runtimeId = this.runtime;
-			packet.item = ItemStack.toNetworkStack(itemComponent.itemStack);
-			packet.position = this.position;
-			packet.velocity = this.velocity;
-			packet.data = [];
-			packet.fromFishing = false;
-
-			// Send the packet to the player if it exists, otherwise broadcast it to the dimension
-			player ? player.session.send(packet) : this.dimension.broadcast(packet);
-		} else {
-			// Create a new AddEntityPacket
-			const packet = new AddEntityPacket();
-
-			// Set the packet properties
-			packet.uniqueEntityId = this.unique;
-			packet.runtimeId = this.runtime;
-			packet.identifier = this.type.identifier;
-			packet.position = this.position;
-			packet.velocity = this.velocity;
-			packet.pitch = this.rotation.pitch;
-			packet.yaw = this.rotation.yaw;
-			packet.headYaw = this.rotation.headYaw;
-			packet.bodyYaw = this.rotation.yaw;
-			packet.attributes = [];
-			packet.data = [...this.metadata];
-			packet.properties = new PropertySyncData([], []);
-			packet.links = [];
-
-			// Send the packet to the player if it exists, otherwise broadcast it to the dimension
-			player ? player.session.send(packet) : this.dimension.broadcast(packet);
-		}
+		// Check if the signal was cancelled
+		if (!value) return this.despawn();
 
 		// Add the entity to the dimension
 		this.dimension.entities.set(this.unique, this);
@@ -350,21 +348,19 @@ class Entity {
 	 * Despawns the entity from the world.
 	 * @param player The player to despawn the entity from.
 	 */
-	public despawn(player?: Player): void {
+	public despawn(): void {
+		// Create a new EntityDespawnedSignal
+		const signal = new EntityDespawnedSignal(this, this.dimension);
+		const value = signal.emit();
+
+		// Check if the signal was cancelled
+		if (!value) return;
+
 		// Set the alive property of the entity to false
 		this.isAlive = false;
 
-		// Create a new RemoveEntityPacket
-		const packet = new RemoveEntityPacket();
-
-		// Set the packet properties
-		packet.uniqueEntityId = this.unique;
-
-		// Remove the entity from the dimension, only if the player is not null
-		if (!player) this.dimension.entities.delete(this.unique);
-
-		// Send the packet to the player if it exists, otherwise broadcast it to the dimension
-		player ? player.session.send(packet) : this.dimension.broadcast(packet);
+		// Delete the entity from the dimension
+		this.dimension.entities.delete(this.unique);
 
 		// Trigger the onDespawn method of all applicable components
 		for (const component of this.getComponents()) component.onDespawn?.();
@@ -376,8 +372,20 @@ class Entity {
 	public kill(): void {
 		// Set the alive property of the entity to false
 		this.isAlive = false;
+		const signal = new EntityDieSignal(this, this.dimension);
+		const value = signal.emit();
 
-		// TODO: Implement item drops and experience drops
+		if (!value) return;
+
+		// TODO: Implement experience drops
+
+		if (this.hasComponent("minecraft:loot")) {
+			// Get the loot component
+			const loot = this.getComponent("minecraft:loot");
+
+			// Generate and drop the entity loot
+			loot.dropLoot();
+		}
 
 		// TODO: Check for keep inventory gamerule
 		if (this.hasComponent("minecraft:inventory")) {
@@ -486,9 +494,40 @@ class Entity {
 	}
 
 	/**
-	 * Syncs the metadata of the entity.
+	 * Checks if the entity contains a specified actor flag.
+	 * @param flag The flag to check.
+	 * @returns Whether or not the entity has the flag.
 	 */
-	public syncData(): void {
+	public hasActorFlag(flag: ActorFlag): boolean {
+		return this.flags.has(flag);
+	}
+
+	/**
+	 * Gets the value of the actor flag.
+	 * @param flag The flag to get.
+	 * @returns The value of the flag.
+	 */
+	public getActorFlag(flag: ActorFlag): boolean {
+		return this.flags.get(flag) ?? false;
+	}
+
+	/**
+	 * Sets the actor flag of the entity.
+	 * @param flag The flag to set.
+	 * @param value The value to set.
+	 */
+	public setActorFlag(flag: ActorFlag, value: boolean): void {
+		// Set the flag value
+		this.flags.set(flag, value);
+
+		// Update the actor flags
+		this.updateActorData();
+	}
+
+	/**
+	 * Updates the actor flags of the entity.
+	 */
+	public updateActorData(): void {
 		// Create a new SetActorDataPacket
 		const packet = new SetActorDataPacket();
 		packet.runtimeEntityId = this.runtime;
@@ -504,13 +543,32 @@ class Entity {
 	}
 
 	/**
-	 * Set's if the entity is visible to other's
+	 * Sets the visibility of the entity.
 	 * @param visibility the value of the entity visibility
 	 */
 	public setVisibility(visibility: boolean): void {
-		const isVisibleComponent = this.getComponent("minecraft:is_visible");
-		if (isVisibleComponent.getCurrentValue() == !visibility) return;
-		isVisibleComponent.setCurrentValue(!visibility, true);
+		// Check if the entity has the visibility component
+		const component = this.hasComponent("minecraft:is_visible")
+			? this.getComponent("minecraft:is_visible")
+			: new EntityIsVisibleComponent(this);
+
+		// Set the visibility of the entity
+		component.setCurrentValue(visibility);
+	}
+
+	/**
+	 * Gets the visibility of the entity.
+	 * @returns The visibility of the entity.
+	 */
+	public getVisibility(): boolean {
+		// Check if the entity has the visibility component
+		if (!this.hasComponent("minecraft:is_visible")) return true;
+
+		// Get the visibility component
+		const component = this.getComponent("minecraft:is_visible");
+
+		// Return the current value
+		return component.getCurrentValue();
 	}
 
 	/**
@@ -631,6 +689,24 @@ class Entity {
 	}
 
 	/**
+	 * Computes the view direction vector based on the current pitch and yaw rotations.
+	 *
+	 * @returns A Vector3f representing the direction the view is pointing.
+	 */
+	public getViewDirection(): Vector3f {
+		// Convert pitch and yaw angles from degrees to radians
+		const pitchRadians = this.rotation.pitch * (Math.PI / 180);
+		const yawRadians = -this.rotation.headYaw * (Math.PI / 180); // Invert yaw for correct orientation
+
+		// Calculate the direction vector components
+		return new Vector3f(
+			Math.sin(yawRadians) * Math.cos(pitchRadians), // X component of the view vector
+			-Math.sin(pitchRadians), // Y component of the view vector (negative for correct orientation)
+			Math.cos(yawRadians) * Math.cos(pitchRadians) // Z component of the view vector
+		);
+	}
+
+	/**
 	 * Adds effect to the player
 	 * @param effect The effect to add to the player
 	 */
@@ -639,6 +715,23 @@ class Entity {
 			? this.getComponent("minecraft:effects")
 			: new EntityEffectsComponent(this);
 		effects.add(effect);
+	}
+
+	/**
+	 * Computes the view direction vector based on the current pitch and yaw rotations.
+	 *
+	 * @param maxDistance - The maximum distance to raycast in the view direction.
+	 * @returns A BlockHitResult representing the block hit by the raycast, or `undefined` if no block was hit.
+	 */
+	public getBlockFromViewDirection(
+		maxDistance: number
+	): BlockHitResult | undefined {
+		const viewDirection = this.getViewDirection();
+		const end = this.position.add(viewDirection.multiply(maxDistance)).floor();
+		const hit = Raycaster.clip(this.dimension, this.position.floor(), end);
+
+		if (!hit || !("blockPosition" in hit)) return undefined;
+		return hit as BlockHitResult;
 	}
 
 	/**
@@ -729,13 +822,12 @@ class Entity {
 
 	/**
 	 * Geta the nametag of the entity.
-	 * @note This method is dependant on the entity having a `minecraft:nametag` component, if not will result in an `error`.
+	 * @note This method is dependant on the entity having a `minecraft:nametag` component.
 	 * @returns The nametag of the entity.
 	 */
-	public getNametag(): string {
+	public getNametag(): string | null {
 		// Check if the entity has a nametag component
-		if (!this.hasComponent("minecraft:nametag"))
-			throw new Error("The entity does not have a nametag component.");
+		if (!this.hasComponent("minecraft:nametag")) return null;
 
 		// Get the nametag component
 		const nametag = this.getComponent("minecraft:nametag");
@@ -748,6 +840,7 @@ class Entity {
 	 * Sets the nametag of the entity.
 	 * @note This method is dependant on the entity having a `minecraft:nametag` component, if the component does not exist it will be created.
 	 * @param nametag The nametag to set.
+	 * @param alwaysVisible Whether or not the nametag should always be visible.
 	 */
 	public setNametag(nametag: string, alwaysVisible = false): void {
 		// Check if the entity has a nametag component
@@ -806,12 +899,11 @@ class Entity {
 
 	/**
 	 * Extinguishes the entity from fire.
-	 * @note This method is dependant on the entity having a `minecraft:on_fire` component, if the component does not exist it will result in an `error`.
+	 * @note This method is dependant on the entity having a `minecraft:on_fire` component.
 	 */
 	public extinguishFire(): void {
 		// Check if the entity has an on fire
-		if (!this.hasComponent("minecraft:on_fire"))
-			throw new Error("The entity does not have an on fire component.");
+		if (!this.hasComponent("minecraft:on_fire")) return;
 
 		// Get the on fire component
 		const component = this.getComponent("minecraft:on_fire");
@@ -826,13 +918,12 @@ class Entity {
 
 	/**
 	 * Gets the variant of the entity.
-	 * @note This method is dependant on the entity having a `minecraft:variant` component, if not will result in an `error`.
+	 * @note This method is dependant on the entity having a `minecraft:variant` component.
 	 * @returns The variant of the entity.
 	 */
 	public getVariant(): number {
 		// Check if the entity has a variant component
-		if (!this.hasComponent("minecraft:variant"))
-			throw new Error("The entity does not have a variant component.");
+		if (!this.hasComponent("minecraft:variant")) return 0;
 
 		// Get the variant component
 		const variant = this.getComponent("minecraft:variant");
@@ -953,6 +1044,13 @@ class Entity {
 	 * @param dimension The dimension to teleport to.
 	 */
 	public teleport(position: Vector3f, dimension?: Dimension): void {
+		// Create a new EntityTeleportSignal
+		const signal = new EntityTeleportSignal(this, position, dimension);
+		const value = signal.emit();
+
+		// Check if the signal was cancelled
+		if (!value) return;
+
 		// Set the position of the entity
 		this.position.x = position.x;
 		this.position.y = position.y;
@@ -1021,6 +1119,237 @@ class Entity {
 				return inventory.container;
 			}
 		}
+	}
+
+	/**
+	 * Causes a player to interact with the entity.
+	 * @param player The player to interact with the entity.
+	 * @param type The type of interaction.
+	 * @returns Whether or not the interaction was successful.
+	 */
+	public interact(player: Player, type: EntityInteractType): boolean {
+		// Get the inventory of the player
+		const inventory = player.getComponent("minecraft:inventory");
+
+		// Get the item stack in the player's hand
+		const itemStack = inventory.getHeldItem();
+
+		// Create a new PlayerInteractWithEntitySignal
+		const signal = new PlayerInteractWithEntitySignal(
+			player,
+			this,
+			itemStack,
+			type
+		);
+
+		// Emit the signal
+		const value = signal.emit();
+
+		// Check if the signal was cancelled
+		if (!value)
+			// Return false as the interaction was cancelled
+			return false;
+
+		// Trigger the onInteract method of the entity components
+		for (const component of this.getComponents()) {
+			component.onInteract?.(player, type);
+		}
+
+		// Return true as the interaction was successful
+		return true;
+	}
+
+	/**
+	 * Whether or not the entity has a tag.
+	 * @param tag The tag to check.
+	 * @returns Whether or not the entity has the tag.
+	 */
+	public hasTag(tag: string): boolean {
+		return this.tags.includes(tag);
+	}
+
+	/**
+	 * Gets the tags of the entity.
+	 * @returns The tags of the entity.
+	 */
+	public getTags(): Array<string> {
+		return this.tags;
+	}
+
+	/**
+	 * Adds a tag to the entity.
+	 * @param tag The tag to add.
+	 * @returns Whether or not the tag was added.
+	 */
+	public addTag(tag: string): boolean {
+		// Check if the tag already exists
+		if (this.tags.includes(tag)) return false;
+
+		// Tags are read-only
+		this.tags.push(tag);
+
+		// Return true as the tag was added
+		return true;
+	}
+
+	/**
+	 * Removes a tag from the entity.
+	 * @param tag The tag to remove.
+	 * @returns Whether or not the tag was removed.
+	 */
+	public removeTag(tag: string): boolean {
+		// Check if the tag exists
+		const index = this.tags.indexOf(tag);
+		if (index === -1) return false;
+
+		// Remove the tag from the entity
+		this.tags.splice(index, 1);
+
+		// Return true as the tag was removed
+		return true;
+	}
+
+	/**
+	 * Creates actor data from a given entity.
+	 * @param entity The entity to generate the actor data from.
+	 * @returns The generated actor data.
+	 */
+	public static toActorData(entity: Entity): ActorData {
+		const identifier = entity.type.identifier;
+		const position = entity.position;
+		const rotation = entity.rotation;
+
+		const extras = Buffer.from("Hello World!");
+
+		const data = new ActorData(identifier, position, rotation, extras);
+
+		return data;
+	}
+
+	public static serialize(entity: Entity): CompoundTag {
+		// Create a new root compound tag
+		const root = new CompoundTag("", {
+			UniqueID: new LongTag("UniqueID", entity.unique),
+			Identifier: new StringTag("Identifier", entity.type.identifier),
+			Tags: new ListTag<StringTag>(
+				"Tags",
+				entity.tags.map((tag) => new StringTag("", tag)),
+				Tag.String
+			)
+		});
+
+		// Create a position list tag.
+		const position = root.createListTag("Pos", Tag.Float);
+
+		// Push the position values to the list.
+		position.push(
+			new FloatTag("", entity.position.x),
+			new FloatTag("", entity.position.y),
+			new FloatTag("", entity.position.z)
+		);
+
+		// Create a rotation list tag.
+		const rotation = root.createListTag("Rotation", Tag.Float);
+
+		// Push the rotation values to the list.
+		rotation.push(
+			new FloatTag("", entity.rotation.yaw),
+			new FloatTag("", entity.rotation.pitch),
+			new FloatTag("", entity.rotation.headYaw)
+		);
+
+		// Create a components list tag.
+		const components = root.createListTag("SerenityComponents", Tag.Compound);
+
+		// Add the components to the root tag.
+		root.addTag(components);
+
+		// Iterate over the components and serialize them.
+		for (const component of entity.getComponents()) {
+			// Get the component type.
+			const type = EntityComponent.components.get(component.identifier);
+			if (!type) continue;
+
+			// Create a data compound tag for the data to be written to.
+			// And serialize the component.
+			const data = new CompoundTag("data");
+			type.serialize(data, component);
+
+			// Create the component tag.
+			const componentTag = new CompoundTag().addTag(
+				new StringTag("identifier", component.identifier),
+				data
+			);
+
+			// Add the component to the list.
+			components.push(componentTag);
+		}
+
+		// Return the root compound tag
+		return root;
+	}
+
+	public static deserialize(
+		tag: CompoundTag,
+		dimension: Dimension,
+		options?: PlayerOptions
+	): Entity {
+		// Get the unique id of the entity.
+		const unique = tag.getTag("UniqueID")?.value as bigint;
+
+		// Get the identifier of the entity.
+		const identifier = tag.getTag("Identifier")?.value as EntityIdentifier;
+
+		// Get the position of the entity.
+		const position = tag.getTag("Pos")?.value as Array<FloatTag>;
+
+		// Get the rotation of the entity.
+		const rotation = tag.getTag("Rotation")?.value as Array<FloatTag>;
+
+		// Get the tags of the entity.
+		const tags = tag.getTag<ListTag<StringTag>>("Tags")?.value ?? [];
+
+		// Create a new entity.
+		const entity = options
+			? new Player(dimension, options)
+			: new Entity(identifier, dimension, unique);
+
+		// Set the position of the entity.
+		entity.position.x = position[0]?.value ?? 0;
+		entity.position.y = position[1]?.value ?? 0;
+		entity.position.z = position[2]?.value ?? 0;
+
+		// Set the rotation of the entity.
+		entity.rotation.yaw = rotation[0]?.value ?? 0;
+		entity.rotation.pitch = rotation[1]?.value ?? 0;
+		entity.rotation.headYaw = rotation[2]?.value ?? 0;
+
+		// Iterate over the tags and add them to the entity.
+		for (const tag of tags) entity.tags.push(tag.value);
+
+		// Get the components of the entity.
+		const components = tag.getTag("SerenityComponents")
+			?.value as Array<CompoundTag>;
+
+		// Iterate over the components and deserialize them.
+		for (const componentTag of components) {
+			// Get the identifier of the component.
+			const identifier = componentTag.getTag("identifier")?.value as string;
+
+			// Get the component type.
+			const type = EntityComponent.components.get(identifier);
+			if (!type) continue;
+
+			// Get the data of the component.
+			const data = componentTag.getTag("data") as CompoundTag;
+			if (!data) continue;
+
+			// Deserialize the component.
+			type.deserialize(data, entity);
+		}
+
+		// Return the entity.
+		return entity;
 	}
 }
 

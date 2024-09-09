@@ -1,6 +1,7 @@
 import { OpenSignPacket } from "@serenityjs/protocol";
 import { ItemIdentifier } from "@serenityjs/item";
 import { ByteTag, CompoundTag, IntTag, StringTag } from "@serenityjs/nbt";
+import { BlockIdentifier } from "@serenityjs/block";
 
 import { BlockComponent } from "./block-component";
 
@@ -39,6 +40,31 @@ interface SignText {
 
 class BlockSignComponent extends BlockComponent {
 	public static readonly identifier = "minecraft:sign";
+	public static types: Array<BlockIdentifier> = [
+		BlockIdentifier.StandingSign,
+		BlockIdentifier.BirchStandingSign,
+		BlockIdentifier.AcaciaStandingSign,
+		BlockIdentifier.SpruceStandingSign,
+		BlockIdentifier.BambooStandingSign,
+		BlockIdentifier.CherryStandingSign,
+		BlockIdentifier.JungleStandingSign,
+		BlockIdentifier.WarpedStandingSign,
+		BlockIdentifier.CrimsonStandingSign,
+		BlockIdentifier.DarkoakStandingSign,
+		BlockIdentifier.MangroveStandingSign,
+		BlockIdentifier.OakHangingSign,
+		BlockIdentifier.BirchHangingSign,
+		BlockIdentifier.AcaciaHangingSign,
+		BlockIdentifier.SpruceHangingSign,
+		BlockIdentifier.BambooHangingSign,
+		BlockIdentifier.CherryHangingSign,
+		BlockIdentifier.JungleHangingSign,
+		BlockIdentifier.WarpedHangingSign,
+		BlockIdentifier.CrimsonHangingSign,
+		BlockIdentifier.DarkOakHangingSign,
+		BlockIdentifier.MangroveHangingSign
+	];
+
 	public isWaxed: boolean;
 	public frontText!: SignText;
 	public backText!: SignText;
@@ -126,7 +152,7 @@ class BlockSignComponent extends BlockComponent {
 		} = textData;
 		const signTag = new CompoundTag(tagName, {}) as CompoundTag<SignTextTag>;
 
-		return signTag.addTag<unknown>(
+		return signTag.addTag(
 			new StringTag("Text", Text),
 			new IntTag("SignTextColor", TextColor),
 			new ByteTag("HideGlowOutline", Number(HideGlowOutline)),

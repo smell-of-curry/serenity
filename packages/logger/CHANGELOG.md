@@ -1,5 +1,35 @@
 # @serenityjs/logger
 
+## 0.5.0
+
+### Minor Changes
+
+- eea5f6d: init v0.5.0-beta
+
+## 0.4.4
+
+### Patch Changes
+
+- dcdcbbb: init 0.4.4-beta
+
+## 0.4.3
+
+### Patch Changes
+
+- dd3c52b: init v0.4.3-beta
+
+## 0.4.2
+
+### Patch Changes
+
+- aff9b3d: init v0.4.2-beta
+
+## 0.4.1
+
+### Patch Changes
+
+- 13cd4f0: v0.4.1-beta
+
 ## 0.4.0
 
 ### Minor Changes

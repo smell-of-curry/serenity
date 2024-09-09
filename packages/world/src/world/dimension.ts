@@ -3,11 +3,15 @@ import {
 	ChunkCoords,
 	type DataPacket,
 	type DimensionType,
+	type IPosition,
 	TextPacket,
 	TextPacketType,
 	Vector3f
 } from "@serenityjs/protocol";
-import { CommandExecutionState, type CommandResult } from "@serenityjs/command";
+import {
+	CommandExecutionState,
+	type CommandResponse
+} from "@serenityjs/command";
 import { EntityIdentifier } from "@serenityjs/entity";
 
 import { Entity } from "../entity";
@@ -15,11 +19,15 @@ import { Player } from "../player";
 import { Block } from "../block";
 import {
 	BlockComponent,
+	BlockStateComponent,
 	EntityComponent,
+	EntityHasGravityComponent,
 	EntityItemComponent,
 	EntityPhysicsComponent
 } from "../components";
+import { ChunkReadSignal } from "../events";
 
+import type { DimensionBounds } from "../types";
 import type { Chunk } from "../chunk";
 import type { Items } from "@serenityjs/item";
 import type { ItemStack } from "../item";
@@ -60,17 +68,22 @@ class Dimension {
 	/**
 	 * The spawn position of the dimension.
 	 */
-	public spawn = new BlockCoordinates(0, 6, 0);
+	public spawn = new Vector3f(0, 0, 0);
 
 	/**
 	 * The view distance of the dimension.
 	 */
-	public viewDistance: number = 128;
+	public viewDistance: number = 256;
 
 	/**
 	 * The simulation distance of the dimension.
 	 */
-	public simulationDistance: number = 48;
+	public simulationDistance: number = 128;
+
+	/**
+	 * The min-max dimension build limits
+	 */
+	public bounds: DimensionBounds;
 
 	/**
 	 * Creates a new dimension.
@@ -85,10 +98,13 @@ class Dimension {
 		identifier: string,
 		type: DimensionType,
 		generator: TerrainGenerator,
-		world: World
+		world: World,
+		bounds?: DimensionBounds
 	) {
 		this.identifier = identifier;
 		this.type = type;
+		// ? Default Bounds
+		this.bounds = bounds ?? { min: -64, max: 320 };
 		this.generator = generator;
 		this.world = world;
 		this.entities = new Map();
@@ -98,72 +114,96 @@ class Dimension {
 	/**
 	 * Ticks the dimension instance.
 	 */
-	public tick(): void {
+	public tick(deltaTick: number): void {
 		// Return if there are no players in the dimension
 		if (this.getPlayers().length === 0) return;
 
-		// Iterate over all the players in the dimension
-		for (const player of this.getPlayers()) {
-			// Tick all the tickable player components
-			for (const component of player.components.values()) component.onTick?.();
+		// Get the positions of all the players in the dimension
+		const positions = this.getPlayers().map((player) => player.position);
 
-			// Iterate over all the entities, and check if the entity is in simulation range
-			for (const entity of this.entities.values()) {
-				// Check if the entity is a player
-				if (entity instanceof Player) continue;
+		// Iterate over all the entities in the dimension
+		for (const entity of this.entities.values()) {
+			// Check if there is a player within the simulation distance to tick the entity
+			const inSimulationRange = positions.some((position) => {
+				const distance = position.distance(entity.position);
+				return distance <= this.simulationDistance;
+			});
 
-				// Get the players and entities position
-				const playerPos = player.position;
-				const entityPos = entity.position;
-
-				// Calulate the distance between the player and the entity
-				const distance = playerPos.distance(entityPos);
-
-				// Check if the entity is in simulation range
-				if (distance > this.simulationDistance) continue;
-
-				// Tick all the tickable entity components
+			// Tick the entity if it is in simulation range
+			if (inSimulationRange) {
 				for (const component of entity.components.values())
-					component.onTick?.();
+					try {
+						component.onTick?.(deltaTick);
+					} catch (reason) {
+						this.world.logger.error(
+							`Failed to tick entity component "${component.identifier}" for entity "${entity.type.identifier}:${entity.unique}" in dimension "${this.identifier}"`,
+							reason
+						);
+					}
 			}
+		}
 
-			// Iterate over all the blocks, and check if the block is in simulation range
-			for (const block of this.blocks.values()) {
-				// Get the block cords from the block
-				const { x, y, z } = block.position;
+		// Iterate over all the blocks in the dimension
+		for (const block of this.blocks.values()) {
+			// Get the block position
+			const position = new Vector3f(
+				block.position.x,
+				block.position.y,
+				block.position.z
+			);
 
-				// Get the players and blocks position
-				const playerPos = player.position;
-				const blockPos = new Vector3f(x, y, z);
+			// Check if there is a player within the simulation distance to tick the block
+			const inSimulationRange = positions.some((player) => {
+				const distance = player.distance(position);
+				return distance <= this.simulationDistance;
+			});
 
-				// Calulate the distance between the player and the block
-				const distance = playerPos.distance(blockPos);
-
-				// Check if the block is in simulation range
-				if (distance > this.simulationDistance) continue;
-
-				// Tick all the tickable block components
-				for (const component of block.components.values()) component.onTick?.();
+			// Tick the block if it is in simulation range
+			if (inSimulationRange) {
+				for (const component of block.components.values())
+					try {
+						component.onTick?.(deltaTick);
+					} catch (reason) {
+						this.world.logger.error(
+							`Failed to tick block component "${component.identifier}" for block "${block.position.x}, ${block.position.y}, ${block.position.z}" in dimension "${this.identifier}"`,
+							reason
+						);
+					}
 			}
 		}
 	}
 
 	/**
 	 * Executes a command in the dimension.
-	 *
 	 * @param command The command to execute.
-	 * @returns The result of the command.
+	 * @returns The response of the command.
 	 */
-	public executeCommand(command: string): CommandResult | undefined {
-		// Check if the command doesnt start with /
-		// If so, add it
-		if (!command.startsWith("/")) command = `/${command}`;
+	public executeCommand<T = unknown>(
+		command: string
+	): CommandResponse<T> | null {
+		// Check if the command starts with a slash, remove it if it does not
+		if (command.startsWith("/")) command = command.slice(1);
 
 		// Create a new command execute state
-		const state = new CommandExecutionState(this.world.commands, command, this);
+		const state = new CommandExecutionState(
+			this.world.commands.getAll(),
+			command,
+			this
+		);
 
-		// Execute the commmand state
-		return state.execute();
+		try {
+			// Execute the command state
+			return state.execute() as CommandResponse<T>;
+		} catch (reason) {
+			// Log the error to the console
+			this.world.logger.error(
+				`Failed to execute command "${command}" in dimension "${this.identifier}"`,
+				reason
+			);
+
+			// Return null if the command was not executed successfully
+			return null;
+		}
 	}
 
 	/**
@@ -196,9 +236,35 @@ class Dimension {
 
 	/**
 	 * Gets all the entities in the dimension.
+	 * @param players Whether or not to include players.
 	 */
-	public getEntities(): Array<Entity> {
-		return [...this.entities.values()];
+	public getEntities(players = true): Array<Entity> {
+		return [...this.entities.values()].filter((entity) => {
+			// Check if the entity is a player
+			if (!players && entity.isPlayer()) return false;
+
+			// Return the entity
+			return true;
+		});
+	}
+
+	/**
+	 * Gets all the entities in a chunk.
+	 * @param chunk The chunk to query.
+	 * @param players Whether or not to include players.
+	 * @returns All the entities in the chunk.
+	 */
+	public getEntitiesInChunk(chunk: Chunk, players = true): Array<Entity> {
+		return this.getEntities().filter((entity) => {
+			// Check if the entity is a player
+			if (!players && entity.isPlayer()) return false;
+
+			// Get the entities chunk
+			const entChunk = entity.getChunk();
+
+			// Check if entities chunk and the given chunk are the same
+			return entChunk.x === chunk.x && entChunk.z === chunk.z;
+		});
 	}
 
 	/**
@@ -233,18 +299,31 @@ class Dimension {
 
 	/**
 	 * Gets a chunk from the dimension.
-	 *
 	 * @param cx The chunk X coordinate.
 	 * @param cz The chunk Z coordinate.
 	 * @returns The chunk.
 	 */
 	public getChunk(cx: number, cz: number): Chunk {
-		return this.world.provider.readChunk(cx, cz, this);
+		// Read the chunk from the provider
+		const chunk = this.world.provider.readChunk(cx, cz, this);
+
+		// Create a new ChunkReadSignal
+		const signal = new ChunkReadSignal(chunk, this);
+		const value = signal.emit();
+
+		// Check if the signal was attempted to be cancelled
+		if (value === false)
+			// Log a warning to the console, as this signal cannot be cancelled
+			this.world.logger.warn(
+				`Chunk read signal cannot be cancelled, chunk: ${cx}, ${cz}`
+			);
+
+		// Return the chunk
+		return chunk;
 	}
 
 	/**
 	 * Gets a chunk from the dimension using a hash key.
-	 *
 	 * @param hash The hash of the chunk.
 	 * @returns The chunk.
 	 */
@@ -258,11 +337,22 @@ class Dimension {
 
 	/**
 	 * Sets a chunk in the dimension.
-	 *
 	 * @param chunk The chunk to set.
 	 */
 	public setChunk(chunk: Chunk): void {
-		this.world.provider.writeChunk(chunk, this);
+		// Create a new ChunkWriteSignal
+		const signal = new ChunkReadSignal(chunk, this);
+		const value = signal.emit();
+
+		// Check if the signal was attempted to be cancelled
+		if (value === false)
+			// Log a warning to the console, as this signal cannot be cancelled
+			this.world.logger.warn(
+				`Chunk write signal cannot be cancelled, chunk: ${chunk.x}, ${chunk.z}`
+			);
+
+		// Write the chunk to the provider
+		return this.world.provider.writeChunk(chunk, this);
 	}
 
 	/**
@@ -302,9 +392,9 @@ class Dimension {
 	 * @param z The Z coordinate of the block.
 	 * @returns The block.
 	 */
-	public getBlock(x: number, y: number, z: number): Block {
+	public getBlock(position: IPosition): Block {
 		// Create a new position vector
-		const position = new BlockCoordinates(x, y, z);
+		const { x, y, z } = position;
 
 		// Check if the block is in the blocks
 		const block = [...this.blocks.entries()].find(
@@ -323,7 +413,11 @@ class Dimension {
 			const permutation = chunk.getPermutation(x, y, z);
 
 			// Convert the permutation to a block.
-			const block = new Block(this, permutation, { x, y, z });
+			const block = new Block(
+				this,
+				permutation,
+				new BlockCoordinates(position.x, position.y, position.z)
+			);
 
 			// Register the components to the block.
 			for (const component of BlockComponent.registry.get(
@@ -340,8 +434,28 @@ class Dimension {
 				if (component) new component(block, identifier);
 			}
 
+			for (const key of Object.keys(permutation.state)) {
+				// Get the component from the registry
+				const component = [...BlockComponent.components.values()].find((x) => {
+					// If the identifier is undefined, we will skip it.
+					if (!x.identifier || !(x.prototype instanceof BlockStateComponent))
+						return false;
+
+					// Initialize the component as a BlockStateComponent.
+					const component = x as typeof BlockStateComponent;
+
+					// Check if the identifier includes the key.
+					// As some states dont include a namespace.
+					return component.state === key;
+				});
+
+				// Check if the component exists.
+				if (component) new component(block, key);
+			}
+
 			// If the block has components add it to the blocks
-			if (block.components.size > 0) this.blocks.set(position, block);
+			if (block.components.size > 0)
+				this.blocks.set(position as BlockCoordinates, block);
 
 			// Return the block
 			return block;
@@ -353,7 +467,7 @@ class Dimension {
 	 * @param position The position to query.
 	 * @returns The topmost block in which the permutation is not air.
 	 */
-	public getTopmostBlock(position: Vector3f): Block {
+	public getTopmostBlock(position: IPosition): Block {
 		// Get the current chunk
 		const chunk = this.getChunk(position.x >> 4, position.z >> 4);
 
@@ -361,7 +475,7 @@ class Dimension {
 		const topLevel = chunk.getTopmostLevel(position);
 
 		// Return the block
-		return this.getBlock(position.x, topLevel, position.z);
+		return this.getBlock({ ...position, y: topLevel });
 	}
 
 	/**
@@ -369,7 +483,7 @@ class Dimension {
 	 * @param position The position to query.
 	 * @returns The bottommost block in which the permutation is not air.
 	 */
-	public getBottommostBlock(position: Vector3f): Block {
+	public getBottommostBlock(position: IPosition): Block {
 		// Get the current chunk
 		const chunk = this.getChunk(position.x >> 4, position.z >> 4);
 
@@ -377,7 +491,7 @@ class Dimension {
 		const bottomLevel = chunk.getBottommostLevel(position);
 
 		// Return the block
-		return this.getBlock(position.x, bottomLevel, position.z);
+		return this.getBlock({ ...position, y: bottomLevel });
 	}
 
 	/**
@@ -409,12 +523,17 @@ class Dimension {
 	 * @param position The position of the entity.
 	 * @returns The entity that was spawned.
 	 */
-	public spawnEntity(identifier: EntityIdentifier, position: Vector3f): Entity {
+	public spawnEntity(
+		identifier: EntityIdentifier | Entity,
+		position: Vector3f
+	): Entity {
 		// Create a new Entity instance
-		const entity = new Entity(identifier, this);
+		const entity =
+			identifier instanceof Entity ? identifier : new Entity(identifier, this);
 
 		// Apply physics to the entity
 		new EntityPhysicsComponent(entity);
+		new EntityHasGravityComponent(entity);
 
 		// Register all valid components to the entity
 		for (const identifier of entity.type.components) {
@@ -433,7 +552,7 @@ class Dimension {
 		entity.position.y = position.y;
 		entity.position.z = position.z;
 
-		// Spawn the entity
+		// Spawn the entity if the signal was not cancelled
 		entity.spawn();
 
 		// Return the entity
@@ -461,8 +580,11 @@ class Dimension {
 
 		// Create a new item component, this will register the item to the entity
 		// As well as a new physics component
-		new EntityItemComponent(entity, itemStack);
+		const component = new EntityItemComponent(entity);
+		component.itemStack = itemStack;
+
 		new EntityPhysicsComponent(entity);
+		new EntityHasGravityComponent(entity);
 
 		// Spawn the item entity
 		entity.spawn();
